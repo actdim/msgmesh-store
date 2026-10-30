@@ -3,7 +3,8 @@ protocol: along
 protocol_version: "4.5.4"
 slug: store-bridge-and-echo-suppression
 type: task
-status: open
+status: done
+completed: 2026-10-30
 priority: high
 created: 2026-10-30
 updated: 2026-10-30
@@ -25,6 +26,6 @@ Implement bidirectional message bus bridge between `@actdim/msgmesh` and `@actdi
 - REQ-3: Bridge MUST suppress feedback loops when store commits trigger bus notifications.
 
 ## Acceptance Criteria
-- [ ] Command sent on bus updates corresponding document in store.
-- [ ] Origin tags verify that echoed mutations are dropped.
-- [ ] Tests verify bidirectional flow without infinite recursions.
+- [x] Command sent on bus updates corresponding document in store.
+- [x] Origin tags verify that echoed mutations are dropped.
+- [x] Tests verify bidirectional flow without infinite recursions.
