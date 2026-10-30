@@ -3,7 +3,8 @@ protocol: along
 protocol_version: "4.5.4"
 slug: cdc-stream-integration
 type: task
-status: open
+status: done
+completed: 2026-10-30
 priority: high
 created: 2026-10-30
 updated: 2026-10-30
@@ -25,6 +26,6 @@ Implement automatic Change Data Capture streaming from underlying SQLite mutatio
 - REQ-3: The stream MUST support filtering by collection and entity ID.
 
 ## Acceptance Criteria
-- [ ] Direct database updates emit verified CDC events on the bus.
-- [ ] Subscribers can filter events by collection name without memory leaks.
-- [ ] Tests verify payload structure and timestamps.
+- [x] Direct database updates emit verified CDC events on the bus.
+- [x] Subscribers can filter events by collection name without memory leaks.
+- [x] Tests verify payload structure and timestamps.

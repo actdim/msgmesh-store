@@ -1,0 +1,10 @@
+# @actdim/msgmesh-store
+
+> **Decoupled Message Bus Bridge & Change Data Capture (CDC) Engine Connecting @actdim/msgmesh with Persistent Stores (LiveStruct & LiveStore)**
+
+## Documentation Links
+- [README.md](README.md): Overview, quick installation, and full skill list.
+- [docs/INDEX.md](docs/INDEX.md): Central Knowledge Base topic catalog.
+- [docs/topic--architecture.md](docs/topic--architecture.md): System Architecture & Flow.
+- [docs/topic--domain-model.md](docs/topic--domain-model.md): Domain Model & Entity Ecosystem.
+- [docs/topic--setup-and-workflow.md](docs/topic--setup-and-workflow.md): Setup, Installation & Agent Workflows.
