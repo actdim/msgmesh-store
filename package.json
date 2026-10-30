@@ -1,0 +1,100 @@
+{
+    "name": "@actdim/msgmesh-store",
+    "version": "1.10.2",
+    "description": "Decoupled message bus bridge and Change Data Capture (CDC) engine connecting @actdim/msgmesh with persistent stores (LiveStruct & LiveStore).",
+    "author": "Pavel Borodaev",
+    "license": "MIT",
+    "type": "module",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/actdim/msgmesh-store.git"
+    },
+    "bugs": {
+        "url": "https://github.com/actdim/msgmesh-store/issues"
+    },
+    "homepage": "https://github.com/actdim/msgmesh-store/#readme",
+    "keywords": [
+        "typescript",
+        "msgmesh",
+        "message-bus",
+        "livestruct",
+        "livestore",
+        "cdc",
+        "change-data-capture",
+        "worker-bridge",
+        "cqrs",
+        "event-sourcing",
+        "sqlite",
+        "reactive"
+    ],
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE"
+    ],
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.es.js"
+        },
+        "./cdc": {
+            "types": "./dist/cdc.d.ts",
+            "import": "./dist/cdc.es.js"
+        },
+        "./bridge": {
+            "types": "./dist/bridge.d.ts",
+            "import": "./dist/bridge.es.js"
+        },
+        "./worker": {
+            "types": "./dist/worker.d.ts",
+            "import": "./dist/worker.es.js"
+        },
+        "./*": {
+            "types": "./dist/*.d.ts",
+            "import": "./dist/*.es.js"
+        }
+    },
+    "typesVersions": {
+        "*": {
+            "*": [
+                "dist/*.d.ts"
+            ]
+        }
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "sideEffects": false,
+    "scripts": {
+        "test": "npx vitest --config=vitest.node.config.ts --no-cache",
+        "test:w": "npx vitest --config=vitest.node.config.ts --watch",
+        "build": "tsc -b tsconfig.json && vite build",
+        "typecheck": "tsc -b tsconfig.json",
+        "format": "prettier --write .",
+        "format:check": "prettier --check ."
+    },
+    "peerDependencies": {
+        "@actdim/livestruct": ">=1.10.2",
+        "@actdim/msgmesh": ">=1.10.2",
+        "@actdim/utico": ">=1.10.2",
+        "rxjs": ">=7.8.0"
+    },
+    "peerDependenciesMeta": {
+        "@actdim/livestruct": {
+            "optional": true
+        }
+    },
+    "devDependencies": {
+        "@actdim/livestruct": "workspace:*",
+        "@actdim/msgmesh": "workspace:*",
+        "@actdim/utico": "workspace:*",
+        "@types/node": "^24.10.0",
+        "prettier": "^3.5.3",
+        "rxjs": "^7.8.2",
+        "typescript": "^5.9.3",
+        "vite": "^6.2.1",
+        "vite-plugin-dts": "^4.5.4",
+        "vite-tsconfig-paths": "^5.1.4",
+        "vitest": "^3.0.9"
+    }
+}

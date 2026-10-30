@@ -1,0 +1,42 @@
+{
+    "compilerOptions": {
+        "declaration": false,
+        "declarationMap": false,
+        "emitDeclarationOnly": false,
+        "sourceMap": false,
+        "inlineSources": false,
+        "inlineSourceMap": false,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "allowSyntheticDefaultImports": true,
+        "allowImportingTsExtensions": true,
+        "resolveJsonModule": true,
+        "traceResolution": false,
+        "useDefineForClassFields": true,
+        "removeComments": true,
+        "forceConsistentCasingInFileNames": true,
+        "emitDecoratorMetadata": true,
+        "experimentalDecorators": true,
+        "moduleResolution": "bundler",
+        "target": "esnext",
+        "module": "esnext",
+        "lib": ["ESNext", "DOM"],
+        "types": [],
+        "allowUmdGlobalAccess": true,
+        "incremental": true,
+        "noEmit": true,
+        "noEmitOnError": true,
+        "isolatedModules": false,
+        "strictNullChecks": false,
+        "noImplicitReturns": true,
+        "strict": false,
+        "noImplicitAny": false,
+        "noFallthroughCasesInSwitch": true,
+        "rootDir": ".",
+        "paths": {
+            "@/*": ["./src/*"]
+        },
+        "composite": true,
+        "importHelpers": true
+    }
+}
