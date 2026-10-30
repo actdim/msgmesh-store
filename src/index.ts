@@ -5,3 +5,5 @@
 
 export * from './cdc/index';
 export * from './bridge/index';
+export * from './worker/index';
+
