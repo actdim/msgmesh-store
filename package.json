@@ -85,9 +85,9 @@
         }
     },
     "devDependencies": {
-        "@actdim/livestruct": "workspace:*",
-        "@actdim/msgmesh": "workspace:*",
-        "@actdim/utico": "workspace:*",
+        "@actdim/livestruct": ">=1.10.2",
+        "@actdim/msgmesh": ">=1.10.2",
+        "@actdim/utico": ">=1.10.2",
         "@types/node": "^24.10.0",
         "prettier": "^3.5.3",
         "rxjs": "^7.8.2",
