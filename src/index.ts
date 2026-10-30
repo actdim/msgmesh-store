@@ -4,18 +4,14 @@
  */
 
 import { Observable } from 'rxjs';
+import {
+    type StoreCdcEvent,
+    type CdcBridge,
+    type MsgMeshBusLike,
+    createCdcBridge,
+} from './cdc/index';
 
-/**
- * Change Data Capture (CDC) event payload.
- */
-export interface StoreCdcEvent<T = Record<string, unknown>> {
-    readonly type: 'insert' | 'update' | 'delete';
-    readonly collection: string;
-    readonly id: string;
-    readonly delta: Partial<T>;
-    readonly origin: 'local' | 'remote' | 'bus';
-    readonly timestamp: number;
-}
+export * from './cdc/index';
 
 /**
  * Configuration options for attaching a persistent store bridge to MsgMesh.
@@ -25,6 +21,7 @@ export interface StoreBridgeOptions {
     readonly enableCdcStream?: boolean;
     readonly enableCommandHandling?: boolean;
     readonly echoSuppressionMs?: number;
+    readonly collection?: string;
 }
 
 /**
@@ -37,25 +34,47 @@ export interface StoreBridgeController {
 }
 
 /**
- * Attaches a LiveStruct/LiveStore collection to an active MsgMesh message bus instance.
+ * Attaches a LiveStruct/LiveStore collection or engine to an active MsgMesh message bus instance.
  */
 export function attachStoreBridge(
-    _bus: unknown,
-    _storeOrCollection: unknown,
+    bus: unknown,
+    storeOrCollection: unknown,
     options: StoreBridgeOptions = {}
 ): StoreBridgeController {
     const channelPrefix = options.channelPrefix ?? 'STORE';
-    let connected = true;
+    const enableCdc = options.enableCdcStream !== false;
+
+    let bridge: CdcBridge | null = null;
+    let fallbackConnected = true;
+
+    if (storeOrCollection && enableCdc) {
+        bridge = createCdcBridge(storeOrCollection, bus as MsgMeshBusLike, {
+            channelPrefix,
+            collection: options.collection,
+        });
+    }
 
     return {
         disconnect(): void {
-            connected = false;
+            if (bridge) {
+                bridge.dispose();
+            } else {
+                fallbackConnected = false;
+            }
         },
         get isConnected(): boolean {
-            return connected;
+            if (bridge) {
+                return bridge.isConnected;
+            }
+            return fallbackConnected;
         },
         get cdc$(): Observable<StoreCdcEvent> {
-            throw new Error(`CDC stream for prefix '${channelPrefix}' requires an active store engine.`);
+            if (bridge) {
+                return bridge.cdc$;
+            }
+            throw new Error(
+                `CDC stream for prefix '${channelPrefix}' requires an active store engine.`
+            );
         },
     };
 }
