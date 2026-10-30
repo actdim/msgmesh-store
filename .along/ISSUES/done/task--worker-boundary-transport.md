@@ -3,7 +3,8 @@ protocol: along
 protocol_version: "4.5.4"
 slug: worker-boundary-transport
 type: task
-status: open
+status: done
+completed: 2026-10-30
 priority: medium
 created: 2026-10-30
 updated: 2026-10-30
@@ -25,6 +26,6 @@ Implement specialized worker transport adapters allowing the store engine to run
 - REQ-3: The transport MUST handle worker lifecycle, initialization, and error boundaries.
 
 ## Acceptance Criteria
-- [ ] Store engine initializes inside a Web Worker.
-- [ ] UI thread dispatches mutations without holding direct SQLite handles.
-- [ ] Benchmark verifies main thread remains at 60fps during heavy background writes.
+- [x] Store engine initializes inside a Web Worker.
+- [x] UI thread dispatches mutations without holding direct SQLite handles.
+- [x] Benchmark verifies main thread remains at 60fps during heavy background writes.
