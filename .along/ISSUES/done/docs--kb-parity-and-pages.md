@@ -3,7 +3,8 @@ protocol: along
 protocol_version: "4.5.4"
 slug: kb-parity-and-pages
 type: docs
-status: in-progress
+status: done
+completed: 2026-11-01
 priority: medium
 created: 2026-11-01
 updated: 2026-11-01
@@ -26,7 +27,7 @@ stubs ("Document system components ... here"). `llms-full.txt` is therefore near
 - REQ-4: The repo MUST contain a VitePress config, a `docs:build` script, and a `pages.yml` workflow deploying to GitHub Pages.
 
 ## Acceptance Criteria
-- [ ] No scaffold placeholder text remains in `docs/`.
-- [ ] Every API name cited in the KB exists in `src/`.
-- [ ] `along kb-sync --check` reports no broken links.
-- [ ] `pnpm run docs:build` succeeds locally.
+- [x] No scaffold placeholder text remains in `docs/`.
+- [x] Every API name cited in the KB exists in `src/`.
+- [x] `along kb-sync --check` reports no broken links.
+- [x] `pnpm run docs:build` succeeds locally.
