@@ -1,10 +1,9 @@
 # Active Issues
 
 ## Active
-<!-- No active issues -->
+- [ ] `(bug)` [worker-transport-lifecycle](ISSUES/bug--worker-transport-lifecycle.md)
 
 ## Backlog
-- [ ] `(bug)` [worker-transport-lifecycle](ISSUES/bug--worker-transport-lifecycle.md)
 - [ ] `(debt)` [perf-tests-and-types](ISSUES/debt--perf-tests-and-types.md)
 
 ## Done (recent)

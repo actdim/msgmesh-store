@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { firstValueFrom } from 'rxjs';
 import { filter, take, toArray } from 'rxjs/operators';
 import {
@@ -10,6 +10,8 @@ import {
     createMessageChannelPair,
     createWorkerStoreClient,
     attachWorkerStoreHost,
+    WorkerDeadError,
+    WorkerHostStorageError,
     type WorkerStoreClient,
     type WorkerHostController,
     type StoreCdcEvent,
@@ -279,5 +281,258 @@ describe('Web Worker Boundary Transport for Storage', () => {
 
         const rows = await client.query('SELECT * FROM docs WHERE collection = ?', ['benchmarks']);
         expect(rows).toHaveLength(itemCount);
+    });
+
+    it('REQ-1 & REQ-2: fatal error transitions client to dead, rejecting subsequent calls immediately with WorkerDeadError and zero timers fired', async () => {
+        const { port1, port2 } = createMessageChannelPair();
+        host = attachWorkerStoreHost(store, port1);
+        client = createWorkerStoreClient(port2);
+
+        await client.ready();
+        expect(client.state).toBe('ready');
+
+        // Fatal crash event on worker port
+        (port2 as any).triggerError(new Error('Unrecoverable worker crash'));
+
+        // Let microtasks run
+        await new Promise((resolve) => setTimeout(resolve, 15));
+
+        expect(client.state).toBe('dead');
+        expect(client.isReady).toBe(false);
+
+        // Verify with fake timers: zero timers fired or scheduled
+        vi.useFakeTimers();
+        try {
+            const patchPromise = client.patch('users', 'u-fail', { name: 'Bob' });
+            await expect(patchPromise).rejects.toThrow(WorkerDeadError);
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('REQ-4: host dispose rejects pending requests with CLOSE reason and sets dead state; peer close() marks client dead', async () => {
+        // Part A: host.dispose() while request pending
+        const pair1 = createMessageChannelPair();
+        host = attachWorkerStoreHost(store, pair1.port1);
+        client = createWorkerStoreClient(pair1.port2, { requestTimeoutMs: 5000 });
+
+        await client.ready();
+
+        // Send a request
+        const queryPromise = client.query('SELECT * FROM docs');
+
+        // Host is disposed
+        host.dispose();
+
+        // Pending query rejects with WorkerDeadError containing "Host disposed"
+        await expect(queryPromise).rejects.toThrow(/Host disposed/);
+        expect(client.state).toBe('dead');
+
+        // Part B: port1.close() marks client dead
+        const pair2 = createMessageChannelPair();
+        const client2 = createWorkerStoreClient(pair2.port2);
+        const host2 = attachWorkerStoreHost(store, pair2.port1);
+
+        await client2.ready();
+        expect(client2.state).toBe('ready');
+
+        pair2.port1.close();
+        await new Promise((resolve) => setTimeout(resolve, 15));
+
+        expect(client2.state).toBe('dead');
+        client2.dispose();
+        host2.dispose();
+    });
+
+    it('REQ-3: messageerror is non-fatal and leaves other pending requests resolvable', async () => {
+        const { port1, port2 } = createMessageChannelPair();
+        host = attachWorkerStoreHost(store, port1);
+        client = createWorkerStoreClient(port2);
+
+        await client.ready();
+
+        const errors: unknown[] = [];
+        const sub = client.errors$.subscribe((err) => errors.push(err));
+
+        // Start a valid query
+        const queryPromise = client.query('SELECT * FROM docs WHERE collection = ?', ['users']);
+
+        // Dispatch a non-fatal messageerror
+        (port2 as any)._dispatch('messageerror', new Error('Simulated deserialization error'));
+
+        // Client must stay ready
+        expect(client.state).toBe('ready');
+        expect(errors).toHaveLength(1);
+
+        // Pending query must still resolve successfully
+        const rows = await queryPromise;
+        expect(Array.isArray(rows)).toBe(true);
+
+        sub.unsubscribe();
+    });
+
+    it('REQ-5: deferred factory is called once under 5 concurrent requests; failing factory retried once then permanent ERROR', async () => {
+        // Part A: 5 concurrent requests memoize pending factory
+        const pair1 = createMessageChannelPair();
+        let factoryCalls = 0;
+
+        host = attachWorkerStoreHost(async () => {
+            factoryCalls++;
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return store;
+        }, pair1.port1);
+
+        client = createWorkerStoreClient(pair1.port2);
+
+        // 5 concurrent requests before ready
+        const results = await Promise.all([
+            client.ready(),
+            client.query('SELECT 1'),
+            client.query('SELECT 2'),
+            client.query('SELECT 3'),
+            client.query('SELECT 4'),
+        ]);
+
+        expect(factoryCalls).toBe(1);
+        expect(results).toHaveLength(5);
+        expect(client.state).toBe('ready');
+
+        // Part B: Failing factory retries once then permanent ERROR
+        const pair2 = createMessageChannelPair();
+        let failCalls = 0;
+
+        const host2 = attachWorkerStoreHost(async () => {
+            failCalls++;
+            throw new Error(`Factory init failed #${failCalls}`);
+        }, pair2.port1, { factoryRetries: 1 });
+
+        const client2 = createWorkerStoreClient(pair2.port2, { autoInit: false });
+
+        // Attempt 1: calls factory (call 1)
+        await expect(client2.ready()).rejects.toThrow('Factory init failed #1');
+        expect(failCalls).toBe(1);
+
+        // Attempt 2: retries factory (call 2)
+        await expect(client2.ready()).rejects.toThrow('Factory init failed #2');
+        expect(failCalls).toBe(2);
+
+        // Attempt 3: exceeds retries, permanent ERROR without calling factory again
+        await expect(client2.ready()).rejects.toThrow(/Factory init failed #2|failed permanently/);
+        expect(failCalls).toBe(2);
+
+        client2.dispose();
+        host2.dispose();
+    });
+
+    it('REQ-3 & REQ-6: command with a function in payload rejects with DataCloneError and client stays ready', async () => {
+        const { port1, port2 } = createMessageChannelPair();
+        host = attachWorkerStoreHost(store, port1);
+        client = createWorkerStoreClient(port2);
+
+        await client.ready();
+        expect(client.state).toBe('ready');
+
+        // Function in payload cannot be cloned by structuredClone
+        const badPayload = { invalidFn: () => 'cannot clone' };
+
+        await expect(
+            client.patch('users', 'u-bad', badPayload as any)
+        ).rejects.toThrow(/could not be cloned|DataCloneError/);
+
+        // Client must remain ready and functional
+        expect(client.state).toBe('ready');
+
+        // Subsequent valid command succeeds
+        await client.create('users', 'u-valid', { name: 'Bob', age: 30 });
+        const usersCol = await store.collection('users');
+        const doc = await usersCol.get('u-valid');
+        expect(doc?.data).toEqual({ name: 'Bob', age: 30 });
+    });
+
+    it('REQ-7: 20 concurrent PATCH to a new id run in order with all fields present', async () => {
+        const { port1, port2 } = createMessageChannelPair();
+        host = attachWorkerStoreHost(store, port1);
+        client = createWorkerStoreClient(port2);
+
+        await client.ready();
+
+        const patchCount = 20;
+        const promises: Promise<void>[] = [];
+
+        for (let i = 0; i < patchCount; i++) {
+            promises.push(
+                client.patch('items', 'item-seq-1', {
+                    [`field_${i}`]: i,
+                })
+            );
+        }
+
+        await Promise.all(promises);
+
+        const itemsCol = await store.collection('items');
+        const finalDoc = await itemsCol.get('item-seq-1');
+        expect(finalDoc).not.toBeNull();
+
+        for (let i = 0; i < patchCount; i++) {
+            expect(finalDoc?.data[`field_${i}`]).toBe(i);
+        }
+    });
+
+    it('Acceptance Criteria: hosting a persisted livestruct store inside a worker fails fast with WorkerHostStorageError', async () => {
+        const { port1, port2 } = createMessageChannelPair();
+
+        // 1. Direct attach with persisted (forceMemory: false) store throws synchronously
+        const persistedStore = await createLiveStruct({
+            name: `test-persisted-${Date.now()}`,
+            forceMemory: false,
+        });
+
+        try {
+            expect(() => {
+                attachWorkerStoreHost(persistedStore, port1);
+            }).toThrow(WorkerHostStorageError);
+
+            // 2. Lazy factory returning persisted store throws on init handshake
+            const hostLazy = attachWorkerStoreHost(async () => persistedStore, port1);
+            const clientLazy = createWorkerStoreClient(port2);
+
+            await expect(clientLazy.ready()).rejects.toThrow(
+                /LiveStruct store hosted in worker must use forceMemory or in-memory storage/
+            );
+
+            clientLazy.dispose();
+            hostLazy.dispose();
+        } finally {
+            await persistedStore.close();
+        }
+    });
+
+    it('REQ-2: reconnect resets dead state to idle and re-establishes worker connection', async () => {
+        const pair1 = createMessageChannelPair();
+        host = attachWorkerStoreHost(store, pair1.port1);
+        client = createWorkerStoreClient(pair1.port2);
+
+        await client.ready();
+        expect(client.state).toBe('ready');
+
+        // Crash current worker port
+        (pair1.port2 as any).triggerError(new Error('Worker dead'));
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        expect(client.state).toBe('dead');
+
+        // Reconnect with new port pair
+        const pair2 = createMessageChannelPair();
+        const host2 = attachWorkerStoreHost(store, pair2.port1);
+
+        await client.reconnect(pair2.port2);
+        expect(client.state).toBe('ready');
+
+        await client.create('users', 'u-reconnect', { ok: true });
+        const usersCol = await store.collection('users');
+        const doc = await usersCol.get('u-reconnect');
+        expect(doc?.data).toEqual({ ok: true });
+
+        host2.dispose();
     });
 });

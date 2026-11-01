@@ -4,25 +4,19 @@ import type {
 } from './types';
 
 /**
- * Deep clones data simulating the Web Worker Structured Clone Algorithm.
+ * Deep clones data using the standard Structured Clone Algorithm.
+ * Strictly enforces cloneability (e.g. functions, Symbols, or non-cloneable objects throw DataCloneError).
  */
 export function safelyClone<T>(data: T): T {
     if (data === undefined || data === null) {
         return data;
     }
-    if (typeof globalThis.structuredClone === 'function') {
-        try {
-            return globalThis.structuredClone(data);
-        } catch {
-            // Fall back to JSON serialization if structuredClone throws (e.g. non-cloneable objects)
-        }
-    }
-    return JSON.parse(JSON.stringify(data)) as T;
+    return structuredClone(data);
 }
 
 /**
  * Universal event listener registration supporting standard addEventListener,
- * Node EventEmitter (on/addListener), or direct onmessage/onerror properties.
+ * Node EventEmitter (on/addListener), or direct onmessage/onerror/onclose properties.
  */
 export function addPortListener(
     port: WorkerMessagePortLike,
@@ -39,12 +33,14 @@ export function addPortListener(
         port.onmessage = listener;
     } else if (type === 'error') {
         port.onerror = listener;
+    } else if (type === 'close') {
+        port.onclose = listener;
     }
 }
 
 /**
  * Universal event listener removal supporting standard removeEventListener,
- * Node EventEmitter (off/removeListener), or direct onmessage/onerror properties.
+ * Node EventEmitter (off/removeListener), or direct onmessage/onerror/onclose properties.
  */
 export function removePortListener(
     port: WorkerMessagePortLike,
@@ -61,6 +57,8 @@ export function removePortListener(
         port.onmessage = null;
     } else if (type === 'error' && port.onerror === listener) {
         port.onerror = null;
+    } else if (type === 'close' && port.onclose === listener) {
+        port.onclose = null;
     }
 }
 
@@ -74,6 +72,7 @@ export class InMemoryMessagePort implements WorkerMessagePortLike {
 
     onmessage: ((event: WorkerMessageEventLike<unknown>) => void) | null = null;
     onerror: ((error: unknown) => void) | null = null;
+    onclose: ((event: unknown) => void) | null = null;
 
     get isClosed(): boolean {
         return this._isClosed;
@@ -84,13 +83,13 @@ export class InMemoryMessagePort implements WorkerMessagePortLike {
     }
 
     postMessage(message: unknown, _transfer?: unknown[]): void {
+        const cloned = safelyClone(message);
+
         if (this._isClosed || !this.peer || this.peer._isClosed) {
             return;
         }
 
-        const cloned = safelyClone(message);
         const target = this.peer;
-
         queueMicrotask(() => {
             if (!target.isClosed) {
                 target._dispatch('message', { data: cloned });
@@ -137,10 +136,20 @@ export class InMemoryMessagePort implements WorkerMessagePortLike {
             return;
         }
         this._isClosed = true;
+        const peer = this.peer;
         this.listeners.clear();
         this.onmessage = null;
         this.onerror = null;
+        this.onclose = null;
         this.peer = null;
+
+        if (peer && !peer._isClosed) {
+            queueMicrotask(() => {
+                if (!peer.isClosed) {
+                    peer._dispatch('close', {});
+                }
+            });
+        }
     }
 
     triggerError(error: unknown): void {
@@ -162,6 +171,10 @@ export class InMemoryMessagePort implements WorkerMessagePortLike {
         } else if (type === 'error') {
             if (typeof this.onerror === 'function') {
                 this.onerror(eventOrData);
+            }
+        } else if (type === 'close') {
+            if (typeof this.onclose === 'function') {
+                this.onclose(eventOrData);
             }
         }
 

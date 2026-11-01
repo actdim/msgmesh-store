@@ -3,7 +3,7 @@ protocol: along
 protocol_version: "4.5.4"
 slug: worker-transport-lifecycle
 type: bug
-status: open
+status: in-progress
 priority: medium
 created: 2026-10-31
 updated: 2026-11-01
@@ -31,11 +31,11 @@ Launch position: **7** in the ticket map below. Plan approved by the user on 202
 - REQ-7 Host MUST serialize commands per `collection:docId`, enqueuing synchronously on receipt (reuse `KeyedSerialQueue`).
 
 ## Acceptance Criteria
-- [ ] Every test listed above exists and is green; `pnpm test` and `tsc -b` green.
-- [ ] After a fatal error or CLOSE no call waits for a timeout (fake-timer test: zero timers fired).
-- [ ] Store factory called exactly once under 5 concurrent first requests.
-- [ ] `grep -n "JSON.parse" src/worker/channel.ts` returns nothing.
-- [ ] Hosting a persisted livestruct store inside a worker fails fast with a documented error (test).
+- [x] Every test listed above exists and is green; `pnpm test` and `tsc -b` green.
+- [x] After a fatal error or CLOSE no call waits for a timeout (fake-timer test: zero timers fired).
+- [x] Store factory called exactly once under 5 concurrent first requests.
+- [x] `grep -n "JSON.parse" src/worker/channel.ts` returns nothing.
+- [x] Hosting a persisted livestruct store inside a worker fails fast with a documented error (test).
 
 ## Plan
 
@@ -76,11 +76,11 @@ Tests (`tests/worker.test.ts`)
 - 20 PATCH to a new id run in order, all fields present.
 
 Acceptance
-- [ ] Every test listed above exists and is green; `pnpm test` and `tsc -b` green.
-- [ ] After a fatal error or CLOSE no call waits for a timeout (fake-timer test: zero timers fired).
-- [ ] Store factory called exactly once under 5 concurrent first requests.
-- [ ] `grep -n "JSON.parse" src/worker/channel.ts` returns nothing.
-- [ ] Hosting a persisted livestruct store inside a worker fails fast with a documented error (test).
+- [x] Every test listed above exists and is green; `pnpm test` and `tsc -b` green.
+- [x] After a fatal error or CLOSE no call waits for a timeout (fake-timer test: zero timers fired).
+- [x] Store factory called exactly once under 5 concurrent first requests.
+- [x] `grep -n "JSON.parse" src/worker/channel.ts` returns nothing.
+- [x] Hosting a persisted livestruct store inside a worker fails fast with a documented error (test).
 Risks: browser Worker `error` can be non-fatal (`errorPolicy:'log'`); strict cloning breaks callers relying on silent JSON drops (CHANGELOG).
 
 ## Ticket map and launch order

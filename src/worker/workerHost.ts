@@ -1,164 +1,105 @@
 import type { Subscription } from 'rxjs';
 import { toStoreCdcObservable } from '../cdc/cdcStream';
 import type { StoreCdcOrigin } from '../cdc/types';
-import type {
-    StoreOrFactory,
-    WorkerClientRequest,
-    WorkerHostController,
-    WorkerHostOptions,
-    WorkerMessageEventLike,
-    WorkerMessagePortLike,
-    WorkerRequestAction,
+import { KeyedSerialQueue } from '../core/keyedQueue';
+import {
+    applyStoreCommand,
+    resolveMutationTarget,
+    type MutationTarget,
+    type NormalizedStoreCommand,
+} from '../core/applyMutation';
+import {
+    WorkerHostStorageError,
+    type StoreOrFactory,
+    type WorkerClientRequest,
+    type WorkerHostController,
+    type WorkerHostMessage,
+    type WorkerHostOptions,
+    type WorkerMessageEventLike,
+    type WorkerMessagePortLike,
 } from './types';
 import { addPortListener, removePortListener } from './channel';
 
 /**
- * Constructs a nested object patch from a dot-delimited path and value.
+ * Fast-fails if a LiveStruct / LiveStore target is not configured for in-memory execution.
  */
-function buildNestedPathPatch(path: string, value: unknown): Record<string, unknown> {
-    const segments = path.split('.');
-    let current: unknown = value;
-    for (let i = segments.length - 1; i >= 0; i--) {
-        current = { [segments[i]]: current };
+export function validateStoreForWorker(store: unknown): void {
+    if (!store || typeof store !== 'object') {
+        return;
     }
-    return current as Record<string, unknown>;
+    const rec = store as Record<string, any>;
+    const engine =
+        rec.engine ??
+        (typeof rec.insertDoc === 'function' && typeof rec.patchDoc === 'function' ? rec : null);
+
+    if (engine && engine.config) {
+        if (engine.config.forceMemory !== true) {
+            throw new WorkerHostStorageError();
+        }
+    } else if (rec.config && typeof rec.config === 'object') {
+        if (rec.config.forceMemory !== true) {
+            throw new WorkerHostStorageError();
+        }
+    }
 }
 
 /**
- * Executes a mutation against the storage engine target inside the worker.
+ * Resolves a storage target into a unified MutationTarget, supporting both
+ * standard LiveStore engines and mock targets providing a collection() accessor.
  */
-async function executeWorkerMutation(
-    target: unknown,
-    action: WorkerRequestAction,
-    collection: string,
-    docId: string,
-    data?: Record<string, unknown>,
-    path?: string,
-    value?: unknown,
-    mutationId?: string
-): Promise<void> {
-    if (!target || typeof target !== 'object') {
-        throw new Error('Worker store target is not a valid object.');
+function resolveTargetForWorker(store: unknown): MutationTarget {
+    try {
+        return resolveMutationTarget(store);
+    } catch (err) {
+        const rec = store as Record<string, any>;
+        if (rec && typeof rec.collection === 'function') {
+            return {
+                async get(collection: string, id: string): Promise<unknown> {
+                    const col = await rec.collection(collection);
+                    const doc = await col.get(id);
+                    return doc ? (doc.data ?? doc) : null;
+                },
+                async insert(
+                    collection: string,
+                    id: string,
+                    data: Record<string, unknown>
+                ): Promise<unknown> {
+                    const col = await rec.collection(collection);
+                    const existing = await col.get(id);
+                    if (existing) {
+                        if (typeof existing.patch === 'function') {
+                            await existing.patch(data);
+                        }
+                        return existing.data ?? existing;
+                    }
+                    const created = await col.create(id, data);
+                    return created.data ?? created;
+                },
+                async patch(
+                    collection: string,
+                    id: string,
+                    patch: Record<string, unknown>
+                ): Promise<unknown> {
+                    const col = await rec.collection(collection);
+                    const existing = await col.get(id);
+                    if (existing) {
+                        if (typeof existing.patch === 'function') {
+                            await existing.patch(patch);
+                        }
+                        return existing.data ?? existing;
+                    }
+                    const created = await col.create(id, patch);
+                    return created.data ?? created;
+                },
+                async remove(collection: string, id: string): Promise<boolean> {
+                    const col = await rec.collection(collection);
+                    await col.delete(id);
+                    return true;
+                },
+            };
+        }
+        throw err;
     }
-
-    const rec = target as Record<string, any>;
-    const storageEngine =
-        rec.engine && typeof rec.engine.patchDoc === 'function'
-            ? rec.engine
-            : typeof rec.patchDoc === 'function' && typeof rec.insertDoc === 'function'
-            ? rec
-            : null;
-
-    const payloadData = data ?? {};
-
-    // 1. Direct low-level SQLite / storage engine execution
-    if (storageEngine) {
-        if (action === 'CREATE') {
-            const existing = await storageEngine.getDoc(collection, docId);
-            if (existing) {
-                await storageEngine.patchDoc(collection, docId, payloadData, undefined, mutationId);
-            } else {
-                await storageEngine.insertDoc(collection, docId, payloadData, undefined, mutationId);
-            }
-            return;
-        }
-
-        if (action === 'DELETE') {
-            await storageEngine.deleteDoc(collection, docId, mutationId);
-            return;
-        }
-
-        if (action === 'PATCH_PATH' && path) {
-            const patchObj = buildNestedPathPatch(path, value);
-            const existing = await storageEngine.getDoc(collection, docId);
-            if (existing) {
-                await storageEngine.patchDoc(collection, docId, patchObj, undefined, mutationId);
-            } else {
-                await storageEngine.insertDoc(collection, docId, patchObj, undefined, mutationId);
-            }
-            return;
-        }
-
-        // Default: PATCH
-        const existing = await storageEngine.getDoc(collection, docId);
-        if (existing) {
-            await storageEngine.patchDoc(collection, docId, payloadData, undefined, mutationId);
-        } else {
-            await storageEngine.insertDoc(collection, docId, payloadData, undefined, mutationId);
-        }
-        return;
-    }
-
-    // 2. High-level LiveStoreInstance fallback (collection access)
-    if (typeof rec.collection === 'function') {
-        const col = await rec.collection(collection);
-        if (action === 'CREATE') {
-            const existing = await col.get(docId);
-            if (!existing) {
-                await col.create(docId, payloadData);
-            } else if (typeof existing.patch === 'function') {
-                await existing.patch(payloadData);
-            }
-        } else if (action === 'DELETE') {
-            await col.delete(docId);
-        } else if (action === 'PATCH_PATH' && path) {
-            const doc = await col.get(docId);
-            if (doc) {
-                if (typeof doc.patchPath === 'function') {
-                    await doc.patchPath(path, value);
-                } else if (typeof doc.patch === 'function') {
-                    await doc.patch(buildNestedPathPatch(path, value));
-                }
-            } else {
-                await col.create(docId, buildNestedPathPatch(path, value));
-            }
-        } else {
-            // PATCH
-            const doc = await col.get(docId);
-            if (doc && typeof doc.patch === 'function') {
-                await doc.patch(payloadData);
-            } else {
-                await col.create(docId, payloadData);
-            }
-        }
-        return;
-    }
-
-    // 3. High-level LiveCollection fallback
-    if (typeof rec.get === 'function' && typeof rec.create === 'function') {
-        if (action === 'CREATE') {
-            const existing = await rec.get(docId);
-            if (!existing) {
-                await rec.create(docId, payloadData);
-            } else if (typeof existing.patch === 'function') {
-                await existing.patch(payloadData);
-            }
-        } else if (action === 'DELETE') {
-            await rec.delete(docId);
-        } else if (action === 'PATCH_PATH' && path) {
-            const doc = await rec.get(docId);
-            if (doc) {
-                if (typeof doc.patchPath === 'function') {
-                    await doc.patchPath(path, value);
-                } else if (typeof doc.patch === 'function') {
-                    await doc.patch(buildNestedPathPatch(path, value));
-                }
-            } else {
-                await rec.create(docId, buildNestedPathPatch(path, value));
-            }
-        } else {
-            // PATCH
-            const doc = await rec.get(docId);
-            if (doc && typeof doc.patch === 'function') {
-                await doc.patch(payloadData);
-            } else {
-                await rec.create(docId, payloadData);
-            }
-        }
-        return;
-    }
-
-    throw new Error('Provided target does not implement supported storage mutation interfaces.');
 }
 
 /**
@@ -170,11 +111,47 @@ export function attachWorkerStoreHost(
     portOrSelf: WorkerMessagePortLike,
     options: WorkerHostOptions = {}
 ): WorkerHostController {
+    if (typeof storeOrFactory !== 'function') {
+        validateStoreForWorker(storeOrFactory);
+    }
+
     let disposed = false;
-    let resolvedStore: unknown | null = typeof storeOrFactory !== 'function' ? storeOrFactory : null;
+    let resolvedStore: unknown | null =
+        typeof storeOrFactory !== 'function' ? storeOrFactory : null;
+    let storePromise: Promise<unknown> | null = null;
     let cdcSubscription: Subscription | null = null;
+    let failureCount = 0;
+    let permanentFailure: Error | null = null;
 
     const defaultOrigin: StoreCdcOrigin = options.defaultOrigin ?? 'local';
+    const maxRetries = options.factoryRetries ?? 1;
+    const commandQueue = new KeyedSerialQueue();
+
+    const reply = (msg: WorkerHostMessage): void => {
+        if (disposed) {
+            return;
+        }
+        try {
+            portOrSelf.postMessage(msg);
+        } catch (err: any) {
+            if (msg.type !== 'ERROR') {
+                const errorMsg = err?.message || String(err);
+                const errName = err?.name || 'DataCloneError';
+                try {
+                    portOrSelf.postMessage({
+                        id: (msg as any).id,
+                        type: 'ERROR',
+                        error: {
+                            name: errName,
+                            message: `${errName}: ${errorMsg}`,
+                        },
+                    });
+                } catch {
+                    // Ignore if port cannot send at all
+                }
+            }
+        }
+    };
 
     const setupCdcStream = (store: unknown): void => {
         if (cdcSubscription || !store) {
@@ -192,18 +169,22 @@ export function attachWorkerStoreHost(
                     if (disposed) {
                         return;
                     }
-                    try {
-                        portOrSelf.postMessage({
-                            type: 'CDC',
-                            payload: event,
-                        });
-                    } catch (err) {
-                        console.error('[WorkerStoreHost] Failed to post CDC event:', err);
-                    }
+                    reply({
+                        type: 'CDC',
+                        payload: event,
+                    });
                 },
                 error: (err) => {
                     if (!disposed) {
                         console.error('[WorkerStoreHost] CDC stream error:', err);
+                        const errorObj =
+                            err instanceof Error
+                                ? { message: err.message, name: err.name, stack: err.stack }
+                                : { message: String(err) };
+                        reply({
+                            type: 'ERROR',
+                            error: errorObj,
+                        });
                     }
                 },
             });
@@ -221,15 +202,44 @@ export function attachWorkerStoreHost(
         if (resolvedStore) {
             return resolvedStore;
         }
-
-        if (typeof storeOrFactory === 'function') {
-            const result = (storeOrFactory as () => unknown | Promise<unknown>)();
-            resolvedStore = result instanceof Promise ? await result : result;
-            setupCdcStream(resolvedStore);
-            return resolvedStore;
+        if (permanentFailure) {
+            throw permanentFailure;
+        }
+        if (typeof storeOrFactory !== 'function') {
+            throw new Error('Worker store instance could not be resolved.');
+        }
+        if (storePromise) {
+            return storePromise;
         }
 
-        throw new Error('Worker store instance could not be resolved.');
+        if (failureCount > maxRetries) {
+            permanentFailure = new Error(
+                `Worker store factory failed permanently after ${failureCount} attempts.`
+            );
+            throw permanentFailure;
+        }
+
+        storePromise = (async () => {
+            try {
+                const result = (storeOrFactory as () => unknown | Promise<unknown>)();
+                const store = result instanceof Promise ? await result : result;
+                validateStoreForWorker(store);
+                resolvedStore = store;
+                storePromise = null;
+                setupCdcStream(resolvedStore);
+                return resolvedStore;
+            } catch (err: any) {
+                failureCount += 1;
+                storePromise = null;
+                const error = err instanceof Error ? err : new Error(String(err));
+                if (failureCount > maxRetries) {
+                    permanentFailure = error;
+                }
+                throw error;
+            }
+        })();
+
+        return storePromise;
     };
 
     const handleMessage = async (event: WorkerMessageEventLike<unknown>): Promise<void> => {
@@ -243,13 +253,19 @@ export function attachWorkerStoreHost(
         }
 
         const clientReq = msg as WorkerClientRequest;
+
+        // Clean close dispatched from client
+        if (clientReq.type === 'CLOSE') {
+            return;
+        }
+
         const reqId = clientReq.id;
 
         // 1. Handshake request
         if (clientReq.type === 'INIT') {
             try {
                 await resolveStoreInstance();
-                portOrSelf.postMessage({
+                reply({
                     id: reqId,
                     type: 'INIT_OK',
                     payload: {
@@ -257,7 +273,7 @@ export function attachWorkerStoreHost(
                     },
                 });
             } catch (err: any) {
-                portOrSelf.postMessage({
+                reply({
                     id: reqId,
                     type: 'ERROR',
                     error: {
@@ -272,29 +288,45 @@ export function attachWorkerStoreHost(
 
         // 2. Mutation command
         if (clientReq.type === 'COMMAND') {
-            try {
+            const payload = clientReq.payload;
+            if (!payload || !payload.action || !payload.collection || !payload.docId) {
+                reply({
+                    id: reqId,
+                    type: 'ERROR',
+                    error: {
+                        message: 'Malformed COMMAND request payload: missing required fields.',
+                    },
+                });
+                return;
+            }
+
+            const mutationId =
+                payload.mutationId ||
+                `wcmd_${payload.docId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+            const normalizedCmd: NormalizedStoreCommand = {
+                type: payload.action,
+                collection: payload.collection,
+                id: payload.docId,
+                delta: payload.data ?? {},
+                path: payload.path,
+                value: payload.value,
+                mutationId,
+                origin: defaultOrigin,
+            };
+
+            const key = `${payload.collection}:${payload.docId}`;
+
+            // Synchronously enqueue into KeyedSerialQueue on receipt
+            const queuePromise = commandQueue.run(key, async () => {
                 const store = await resolveStoreInstance();
-                const payload = clientReq.payload;
-                if (!payload || !payload.action || !payload.collection || !payload.docId) {
-                    throw new Error('Malformed COMMAND request payload: missing required fields.');
-                }
+                const target = resolveTargetForWorker(store);
+                await applyStoreCommand(target, normalizedCmd);
+            });
 
-                const mutationId =
-                    payload.mutationId ||
-                    `wcmd_${payload.docId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-                await executeWorkerMutation(
-                    store,
-                    payload.action,
-                    payload.collection,
-                    payload.docId,
-                    payload.data,
-                    payload.path,
-                    payload.value,
-                    mutationId
-                );
-
-                portOrSelf.postMessage({
+            try {
+                await queuePromise;
+                reply({
                     id: reqId,
                     type: 'COMMAND_OK',
                     payload: {
@@ -302,7 +334,7 @@ export function attachWorkerStoreHost(
                     },
                 });
             } catch (err: any) {
-                portOrSelf.postMessage({
+                reply({
                     id: reqId,
                     type: 'ERROR',
                     error: {
@@ -341,7 +373,7 @@ export function attachWorkerStoreHost(
                     throw new Error('Storage target does not support raw SQL querying.');
                 }
 
-                portOrSelf.postMessage({
+                reply({
                     id: reqId,
                     type: 'QUERY_OK',
                     payload: {
@@ -349,7 +381,7 @@ export function attachWorkerStoreHost(
                     },
                 });
             } catch (err: any) {
-                portOrSelf.postMessage({
+                reply({
                     id: reqId,
                     type: 'ERROR',
                     error: {
@@ -382,11 +414,26 @@ export function attachWorkerStoreHost(
             }
             disposed = true;
 
+            try {
+                portOrSelf.postMessage({ type: 'CLOSE', reason: 'Host disposed' });
+            } catch {
+                // Ignore if port already closed or broken
+            }
+
             removePortListener(portOrSelf, 'message', handleMessage);
 
             if (cdcSubscription) {
                 cdcSubscription.unsubscribe();
                 cdcSubscription = null;
+            }
+
+            if (resolvedStore) {
+                const storeObj = resolvedStore as any;
+                if (typeof storeObj.close === 'function') {
+                    void storeObj.close();
+                } else if (typeof storeObj.dispose === 'function') {
+                    void storeObj.dispose();
+                }
             }
         },
     };
