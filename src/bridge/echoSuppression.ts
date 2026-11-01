@@ -2,6 +2,7 @@ import type { StoreCdcOrigin } from '../cdc/types';
 
 /**
  * Metadata record for a tracked mutation.
+ * @deprecated Use MutationLedger deterministic suppression instead.
  */
 export interface EchoRecord {
     readonly mutationId: string;
@@ -14,6 +15,7 @@ export interface EchoRecord {
 /**
  * Sliding window tracker for identifying echoed mutations, reflected events,
  * and breaking bidirectional message bus loops.
+ * @deprecated Use MutationLedger deterministic suppression instead.
  */
 export class EchoTracker {
     private readonly ttlMs: number;
@@ -35,6 +37,7 @@ export class EchoTracker {
             return;
         }
         this.prune();
+        this.records.delete(mutationId);
         this.records.set(mutationId, {
             mutationId,
             origin,
@@ -87,12 +90,16 @@ export class EchoTracker {
 
     /**
      * Removes expired records from the sliding window.
+     * Since entries are inserted chronologically into Map, iterate insertion order
+     * and break at the first unexpired entry.
      */
-    prune(): void {
-        const cutoff = Date.now() - this.ttlMs;
+    prune(now = Date.now()): void {
+        const cutoff = now - this.ttlMs;
         for (const [key, rec] of this.records.entries()) {
             if (rec.timestamp < cutoff) {
                 this.records.delete(key);
+            } else {
+                break;
             }
         }
     }

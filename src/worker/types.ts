@@ -31,7 +31,14 @@ export type WorkerRequestAction = 'CREATE' | 'PATCH' | 'PATCH_PATH' | 'DELETE';
 /**
  * Message types emitted by the client to the worker host.
  */
-export type WorkerRequestType = 'INIT' | 'COMMAND' | 'QUERY' | 'CLOSE';
+export type WorkerRequestType =
+    | 'INIT'
+    | 'COMMAND'
+    | 'QUERY'
+    | 'BATCH'
+    | 'CDC_SUBSCRIBE'
+    | 'CDC_UNSUBSCRIBE'
+    | 'CLOSE';
 
 /**
  * Clean shutdown / close message dispatched across worker boundary in either direction.
@@ -39,6 +46,20 @@ export type WorkerRequestType = 'INIT' | 'COMMAND' | 'QUERY' | 'CLOSE';
 export interface WorkerCloseMessage {
     readonly type: 'CLOSE';
     readonly reason?: string;
+}
+
+/**
+ * Client signals subscription to CDC stream.
+ */
+export interface WorkerCdcSubscribeMessage {
+    readonly type: 'CDC_SUBSCRIBE';
+}
+
+/**
+ * Client signals cancellation of CDC stream subscription.
+ */
+export interface WorkerCdcUnsubscribeMessage {
+    readonly type: 'CDC_UNSUBSCRIBE';
 }
 
 /**
@@ -61,9 +82,13 @@ export interface WorkerCommandRequest {
     readonly id: string;
     readonly type: 'COMMAND';
     readonly payload: {
-        readonly action: WorkerRequestAction;
+        readonly type?: WorkerRequestAction;
+        /** @deprecated Use type instead. */
+        readonly action?: WorkerRequestAction;
         readonly collection: string;
         readonly docId: string;
+        readonly delta?: Record<string, unknown>;
+        /** @deprecated Use delta instead. */
         readonly data?: Record<string, unknown>;
         readonly path?: string;
         readonly value?: unknown;
@@ -84,12 +109,24 @@ export interface WorkerQueryRequest {
 }
 
 /**
+ * Batch request packaging multiple client operations together.
+ */
+export interface WorkerBatchRequest {
+    readonly id: string;
+    readonly type: 'BATCH';
+    readonly payload: WorkerClientRequest[];
+}
+
+/**
  * Union of all requests sent from client to worker.
  */
 export type WorkerClientRequest =
     | WorkerInitRequest
     | WorkerCommandRequest
     | WorkerQueryRequest
+    | WorkerBatchRequest
+    | WorkerCdcSubscribeMessage
+    | WorkerCdcUnsubscribeMessage
     | WorkerCloseMessage;
 
 /**
@@ -125,11 +162,40 @@ export interface WorkerQueryResponse {
 }
 
 /**
- * Unsolicited Change Data Capture (CDC) delta event stream from worker to client.
+ * Individual result inside a batch response.
+ */
+export interface WorkerBatchResultItem {
+    readonly id: string;
+    readonly success: boolean;
+    readonly result?: unknown;
+    readonly error?: unknown;
+}
+
+/**
+ * Batch confirmation response containing per-item outcomes.
+ */
+export interface WorkerBatchResponse {
+    readonly id: string;
+    readonly type: 'BATCH_OK';
+    readonly payload: {
+        readonly results: WorkerBatchResultItem[];
+    };
+}
+
+/**
+ * Unsolicited single Change Data Capture (CDC) delta event stream from worker to client.
  */
 export interface WorkerCdcResponse {
     readonly type: 'CDC';
     readonly payload: StoreCdcEvent;
+}
+
+/**
+ * Batched Change Data Capture (CDC) events flushed per microtask from worker to client.
+ */
+export interface WorkerCdcBatchMessage {
+    readonly type: 'CDC_BATCH';
+    readonly payload: StoreCdcEvent[];
 }
 
 /**
@@ -154,6 +220,8 @@ export type WorkerHostMessage =
     | WorkerCommandResponse
     | WorkerQueryResponse
     | WorkerCdcResponse
+    | WorkerCdcBatchMessage
+    | WorkerBatchResponse
     | WorkerErrorResponse
     | WorkerCloseMessage;
 
@@ -169,12 +237,12 @@ export interface WorkerMessageEventLike<T = unknown> {
  */
 export interface WorkerMessagePortLike {
     postMessage(message: unknown, transfer?: unknown[]): void;
-    addEventListener?(type: string, listener: (...args: any[]) => void): void;
-    removeEventListener?(type: string, listener: (...args: any[]) => void): void;
-    on?(event: string, listener: (...args: any[]) => void): void;
-    off?(event: string, listener: (...args: any[]) => void): void;
-    addListener?(event: string, listener: (...args: any[]) => void): void;
-    removeListener?(event: string, listener: (...args: any[]) => void): void;
+    addEventListener?(type: string, listener: (...args: unknown[]) => void): void;
+    removeEventListener?(type: string, listener: (...args: unknown[]) => void): void;
+    on?(event: string, listener: (...args: unknown[]) => void): void;
+    off?(event: string, listener: (...args: unknown[]) => void): void;
+    addListener?(event: string, listener: (...args: unknown[]) => void): void;
+    removeListener?(event: string, listener: (...args: unknown[]) => void): void;
     onmessage?: ((event: WorkerMessageEventLike<unknown>) => void) | null;
     onerror?: ((error: unknown) => void) | null;
     onclose?: ((event: unknown) => void) | null;
@@ -198,6 +266,7 @@ export interface WorkerStoreClientOptions {
     readonly initPayload?: Record<string, unknown>;
     readonly terminateOnDispose?: boolean;
     readonly errorPolicy?: 'fatal' | 'log';
+    readonly batch?: 'none' | 'microtask' | ((flush: () => void) => void);
 }
 
 /**
@@ -241,6 +310,8 @@ export interface WorkerStoreClient {
         options?: { mutationId?: string }
     ): Promise<void>;
     query<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+    /** @deprecated Use dispose() instead. */
+    disconnect?(): void;
     dispose(): void;
 }
 
@@ -253,7 +324,6 @@ export type StoreOrFactory = unknown | (() => unknown | Promise<unknown>);
  * Configuration options for attaching a worker store host.
  */
 export interface WorkerHostOptions {
-    readonly channelPrefix?: string;
     readonly defaultOrigin?: StoreCdcOrigin;
     readonly collection?: string;
     readonly factoryRetries?: number;

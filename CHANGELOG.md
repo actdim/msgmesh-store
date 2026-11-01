@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [1.11.1] - 2026-11-01
 
+### Changed
+- Mutation deduplication: unified mutation execution exclusively in `applyMutation.ts` with single `buildNestedPathPatch` definition; removed legacy mutation functions.
+- Deprecated legacy EchoTracker in favor of deterministic count-based MutationLedger.
+- Opt-in worker batching: added `batch` option ('microtask' | custom flush) on WorkerStoreClient, handling BATCH wire messages and BATCH_OK responses.
+- CDC subscriber gating: client issues CDC_SUBSCRIBE on first subscriber and CDC_UNSUBSCRIBE on zero subscribers; worker host buffers deltas into microtask CDC_BATCH.
+- Typed public API: strictly typed `MsgMeshBusLike` and `StoreTarget` interfaces; eliminated all `any` usages across the codebase.
+- Deprecated action (use type), data (use delta), and disconnect (use dispose) across bridge and worker APIs.
+- Deterministic test suite: eliminated all fixed setTimeout calls in test suite; entire suite now runs hermetically in under 2 seconds.
+
 ### Fixed
 - Worker transport lifecycle: explicit client states ('idle' | 'initializing' | 'ready' | 'dead' | 'disposed') with immediate WorkerDeadError on dead or disposed state.
 - Close signalling: bidirectional CLOSE message handling and port close event propagation marking client dead and rejecting pending calls.

@@ -192,6 +192,60 @@ export function normalizeCommand(
  * Resolves a storage instance, collection, or low-level engine into a unified MutationTarget.
  * Accesses only public APIs and strictly enforces collection boundary constraints.
  */
+interface ResolvableEngineRecord {
+    insertDoc?: (
+        col: string,
+        id: string,
+        data: Record<string, unknown>,
+        meta?: unknown,
+        mutationId?: string,
+        origin?: string
+    ) => Promise<{ data?: unknown } | null>;
+    patchDoc?: (
+        col: string,
+        id: string,
+        patch: Record<string, unknown>,
+        meta?: unknown,
+        mutationId?: string,
+        origin?: string
+    ) => Promise<{ data?: unknown } | null>;
+    deleteDoc?: (col: string, id: string, mutationId?: string, origin?: string) => Promise<unknown>;
+    getDoc?: (col: string, id: string) => Promise<{ data?: unknown } | null>;
+    flush?: (col?: string, id?: string) => Promise<void>;
+}
+
+interface ResolvableStoreRecord extends ResolvableEngineRecord {
+    name?: string;
+    engine?: ResolvableEngineRecord;
+    engineAccess?: {
+        commitRaw: (params: Record<string, unknown>) => Promise<unknown>;
+    };
+    get?: (idOrCol: string, id?: string) => Promise<{ data?: unknown; patch?: (d: unknown) => Promise<unknown> } | unknown>;
+    create?: (id: string, data: Record<string, unknown>) => Promise<{ data?: unknown } | unknown>;
+    delete?: (id: string) => Promise<unknown>;
+    insert?: (
+        collection: string,
+        id: string,
+        data: Record<string, unknown>,
+        mutationId?: string,
+        origin?: string
+    ) => Promise<unknown>;
+    patch?: (
+        collection: string,
+        id: string,
+        patch: Record<string, unknown>,
+        mutationId?: string,
+        origin?: string
+    ) => Promise<unknown>;
+    remove?: (
+        collection: string,
+        id: string,
+        mutationId?: string,
+        origin?: string
+    ) => Promise<boolean>;
+    flush?: (col?: string, id?: string) => Promise<void>;
+}
+
 export function resolveMutationTarget(
     store: unknown,
     options: { boundCollection?: string } = {}
@@ -200,7 +254,7 @@ export function resolveMutationTarget(
         throw new UnsupportedStoreError();
     }
 
-    const rec = store as Record<string, any>;
+    const rec = store as ResolvableStoreRecord;
 
     // Case 1: High-level LiveCollection (has name, get, create, delete)
     if (
@@ -229,7 +283,7 @@ export function resolveMutationTarget(
             async get(collection: string, id: string): Promise<unknown> {
                 assertCol(collection);
                 const doc = await rec.get(id);
-                return doc ? (doc.data ?? doc) : null;
+                return doc ? ((doc as { data?: unknown }).data ?? doc) : null;
             },
             async insert(
                 collection: string,
@@ -247,17 +301,17 @@ export function resolveMutationTarget(
                         mutationId,
                     });
                     const doc = await rec.get(id);
-                    return doc ? (doc.data ?? doc) : null;
+                    return doc ? ((doc as { data?: unknown }).data ?? doc) : null;
                 }
                 const existing = await rec.get(id);
                 if (existing) {
-                    if (typeof existing.patch === 'function') {
-                        await existing.patch(data);
+                    if (typeof (existing as { patch?: (p: unknown) => Promise<unknown> }).patch === 'function') {
+                        await (existing as { patch: (p: unknown) => Promise<unknown> }).patch(data);
                     }
-                    return existing.data ?? existing;
+                    return (existing as { data?: unknown }).data ?? existing;
                 }
-                const created = await rec.create(id, data);
-                return created.data ?? created;
+                const created = (await rec.create(id, data)) as { data?: unknown } | null;
+                return created && typeof created === 'object' && 'data' in created ? created.data : created;
             },
             async patch(
                 collection: string,
@@ -275,17 +329,17 @@ export function resolveMutationTarget(
                         mutationId,
                     });
                     const doc = await rec.get(id);
-                    return doc ? (doc.data ?? doc) : null;
+                    return doc ? ((doc as { data?: unknown }).data ?? doc) : null;
                 }
                 const existing = await rec.get(id);
                 if (existing) {
-                    if (typeof existing.patch === 'function') {
-                        await existing.patch(patch);
+                    if (typeof (existing as { patch?: (p: unknown) => Promise<unknown> }).patch === 'function') {
+                        await (existing as { patch: (p: unknown) => Promise<unknown> }).patch(patch);
                     }
-                    return existing.data ?? existing;
+                    return (existing as { data?: unknown }).data ?? existing;
                 }
-                const created = await rec.create(id, patch);
-                return created.data ?? created;
+                const created = (await rec.create(id, patch)) as { data?: unknown } | null;
+                return created && typeof created === 'object' && 'data' in created ? created.data : created;
             },
             async remove(
                 collection: string,
@@ -502,7 +556,7 @@ export function resolveMutationTarget(
         typeof rec.patch === 'function' &&
         typeof rec.remove === 'function'
     ) {
-        return rec as MutationTarget;
+        return rec as unknown as MutationTarget;
     }
 
     throw new UnsupportedStoreError();

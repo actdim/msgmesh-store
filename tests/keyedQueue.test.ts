@@ -1,19 +1,31 @@
 import { describe, it, expect } from 'vitest';
 import { KeyedSerialQueue } from '../src/core/keyedQueue';
 
+function createDeferred<T = void>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+    return { promise, resolve, reject };
+}
+
 describe('KeyedSerialQueue', () => {
     it('executes tasks for the same key strictly sequentially in arrival order', async () => {
         const queue = new KeyedSerialQueue();
         const executionOrder: number[] = [];
+        const t1Gate = createDeferred<void>();
+        const t2Gate = createDeferred<void>();
 
         const t1 = queue.run('user-1', async () => {
-            await new Promise((resolve) => setTimeout(resolve, 30));
+            await t1Gate.promise;
             executionOrder.push(1);
             return 'res-1';
         });
 
         const t2 = queue.run('user-1', async () => {
-            await new Promise((resolve) => setTimeout(resolve, 5));
+            await t2Gate.promise;
             executionOrder.push(2);
             return 'res-2';
         });
@@ -23,32 +35,54 @@ describe('KeyedSerialQueue', () => {
             return 'res-3';
         });
 
-        const results = await Promise.all([t1, t2, t3]);
-        expect(results).toEqual(['res-1', 'res-2', 'res-3']);
+        // While t1 is blocked, neither t2 nor t3 should have executed
+        expect(executionOrder).toEqual([]);
+
+        // Unblock t1
+        t1Gate.resolve();
+        expect(await t1).toBe('res-1');
+        expect(executionOrder).toEqual([1]);
+
+        // Unblock t2
+        t2Gate.resolve();
+        const [r2, r3] = await Promise.all([t2, t3]);
+        expect(r2).toBe('res-2');
+        expect(r3).toBe('res-3');
         expect(executionOrder).toEqual([1, 2, 3]);
     });
 
     it('executes tasks for different keys concurrently', async () => {
         const queue = new KeyedSerialQueue();
-        const startTimes = new Map<string, number>();
-        const finishTimes = new Map<string, number>();
+        const aStarted = createDeferred<void>();
+        const bStarted = createDeferred<void>();
+        const aGate = createDeferred<void>();
+
+        let aFinished = false;
+        let bFinished = false;
 
         const pA = queue.run('key-A', async () => {
-            startTimes.set('A', Date.now());
-            await new Promise((resolve) => setTimeout(resolve, 40));
-            finishTimes.set('A', Date.now());
+            aStarted.resolve();
+            await aGate.promise;
+            aFinished = true;
         });
 
         const pB = queue.run('key-B', async () => {
-            startTimes.set('B', Date.now());
-            await new Promise((resolve) => setTimeout(resolve, 10));
-            finishTimes.set('B', Date.now());
+            bStarted.resolve();
+            bFinished = true;
         });
 
-        await Promise.all([pA, pB]);
+        // Wait for both to start
+        await Promise.all([aStarted.promise, bStarted.promise]);
+        await pB;
 
-        // Key B should finish before key A finishes even though both started around the same time
-        expect(finishTimes.get('B')!).toBeLessThan(finishTimes.get('A')!);
+        // B finishes while A is still blocked
+        expect(bFinished).toBe(true);
+        expect(aFinished).toBe(false);
+
+        // Unblock A
+        aGate.resolve();
+        await pA;
+        expect(aFinished).toBe(true);
     });
 
     it('isolates errors so subsequent tasks on the same key still execute', async () => {
@@ -74,21 +108,29 @@ describe('KeyedSerialQueue', () => {
     it('drains completely waiting for all pending tasks across all keys', async () => {
         const queue = new KeyedSerialQueue();
         let count = 0;
+        const gate1 = createDeferred<void>();
+        const gate2 = createDeferred<void>();
+        const gate3 = createDeferred<void>();
 
         queue.run('k1', async () => {
-            await new Promise((resolve) => setTimeout(resolve, 20));
+            await gate1.promise;
             count++;
         });
         queue.run('k2', async () => {
-            await new Promise((resolve) => setTimeout(resolve, 30));
+            await gate2.promise;
             count++;
         });
         queue.run('k1', async () => {
-            await new Promise((resolve) => setTimeout(resolve, 10));
+            await gate3.promise;
             count++;
         });
 
         expect(queue.size).toBe(2);
+
+        gate1.resolve();
+        gate2.resolve();
+        gate3.resolve();
+
         await queue.drain();
         expect(count).toBe(3);
         expect(queue.size).toBe(0);
@@ -98,14 +140,21 @@ describe('KeyedSerialQueue', () => {
         const queue = new KeyedSerialQueue();
         expect(queue.size).toBe(0);
 
+        const gate1 = createDeferred<void>();
+        const gate2 = createDeferred<void>();
+
         const p1 = queue.run('key-1', async () => {
-            await new Promise((resolve) => setTimeout(resolve, 15));
+            await gate1.promise;
         });
         const p2 = queue.run('key-2', async () => {
-            await new Promise((resolve) => setTimeout(resolve, 15));
+            await gate2.promise;
         });
 
         expect(queue.size).toBe(2);
+
+        gate1.resolve();
+        gate2.resolve();
+
         await Promise.all([p1, p2]);
         expect(queue.size).toBe(0);
     });

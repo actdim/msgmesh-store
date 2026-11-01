@@ -63,8 +63,8 @@ export function safeClone<T>(val: T): T {
 export function safeSend(
     bus: MsgMeshBusLike,
     params: {
-        channel: string | any;
-        group?: string | any;
+        channel: string;
+        group?: 'in' | 'out' | string;
         topic?: string;
         payload?: unknown;
         [key: string]: unknown;

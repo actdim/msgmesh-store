@@ -58,8 +58,21 @@ export interface CdcBridge {
     readonly isDisposed: boolean;
     readonly cdc$: Observable<StoreCdcEvent>;
     dispose(): void;
+    /** @deprecated Use dispose() instead. */
     disconnect(): void;
     readonly isConnected: boolean;
+}
+
+/**
+ * Options passed to MsgMeshBusLike.on.
+ */
+export interface MsgMeshBusOnParams {
+    channel: string;
+    group?: 'in' | 'out' | string;
+    topic?: string;
+    callback?: (msg: { channel?: string; group?: string; topic?: string; payload?: unknown; [key: string]: unknown }) => void;
+    handler?: (msg: unknown) => void | Promise<void>;
+    [key: string]: unknown;
 }
 
 /**
@@ -67,12 +80,12 @@ export interface CdcBridge {
  */
 export interface MsgMeshBusLike {
     send(params: {
-        channel: string | any;
-        group?: string | any;
+        channel: string;
+        group?: 'in' | 'out' | string;
         topic?: string;
         payload?: unknown;
         [key: string]: unknown;
     }): Promise<unknown>;
-    on?(params: any): unknown;
+    on?(params: MsgMeshBusOnParams): (() => void) | void;
     [key: string]: unknown;
 }

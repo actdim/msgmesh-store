@@ -1,0 +1,24 @@
+{
+  "slug": "perf-tests-and-types",
+  "title": "Perf tests and types",
+  "status": "in-progress",
+  "execution_mode": "direct",
+  "phase": "execution",
+  "plan_approved": true,
+  "current_step": 1,
+  "total_steps": 1,
+  "retry_limit": 2,
+  "plan_revision": 1,
+  "created": "2026-11-01T10:31:05Z",
+  "updated": "2026-11-01T10:31:05Z",
+  "steps": [
+    {
+      "step": 1,
+      "title": "Step 1",
+      "status": "pending",
+      "retries": 0,
+      "started": null,
+      "completed": null
+    }
+  ]
+}

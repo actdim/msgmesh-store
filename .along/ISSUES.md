@@ -1,10 +1,10 @@
 # Active Issues
 
 ## Active
-<!-- No active issues -->
+- [ ] `(debt)` [perf-tests-and-types](ISSUES/debt--perf-tests-and-types.md)
 
 ## Backlog
-- [ ] `(debt)` [perf-tests-and-types](ISSUES/debt--perf-tests-and-types.md)
+<!-- No backlog issues -->
 
 ## Done (recent)
 - [x] `(bug)` [worker-transport-lifecycle](ISSUES/done/bug--worker-transport-lifecycle.md)

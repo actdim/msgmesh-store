@@ -21,7 +21,7 @@ export function safelyClone<T>(data: T): T {
 export function addPortListener(
     port: WorkerMessagePortLike,
     type: string,
-    listener: (...args: any[]) => void
+    listener: (...args: unknown[]) => void
 ): void {
     if (typeof port.addEventListener === 'function') {
         port.addEventListener(type, listener);
@@ -30,11 +30,11 @@ export function addPortListener(
     } else if (typeof port.addListener === 'function') {
         port.addListener(type, listener);
     } else if (type === 'message') {
-        port.onmessage = listener;
+        port.onmessage = listener as (event: WorkerMessageEventLike<unknown>) => void;
     } else if (type === 'error') {
-        port.onerror = listener;
+        port.onerror = listener as (error: unknown) => void;
     } else if (type === 'close') {
-        port.onclose = listener;
+        port.onclose = listener as (event: unknown) => void;
     }
 }
 
@@ -45,7 +45,7 @@ export function addPortListener(
 export function removePortListener(
     port: WorkerMessagePortLike,
     type: string,
-    listener: (...args: any[]) => void
+    listener: (...args: unknown[]) => void
 ): void {
     if (typeof port.removeEventListener === 'function') {
         port.removeEventListener(type, listener);
@@ -67,7 +67,7 @@ export function removePortListener(
  */
 export class InMemoryMessagePort implements WorkerMessagePortLike {
     private peer: InMemoryMessagePort | null = null;
-    private listeners = new Map<string, Set<(...args: any[]) => void>>();
+    private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
     private _isClosed = false;
 
     onmessage: ((event: WorkerMessageEventLike<unknown>) => void) | null = null;
@@ -97,33 +97,33 @@ export class InMemoryMessagePort implements WorkerMessagePortLike {
         });
     }
 
-    addEventListener(type: string, listener: (...args: any[]) => void): void {
+    addEventListener(type: string, listener: (...args: unknown[]) => void): void {
         if (!this.listeners.has(type)) {
             this.listeners.set(type, new Set());
         }
         this.listeners.get(type)!.add(listener);
     }
 
-    removeEventListener(type: string, listener: (...args: any[]) => void): void {
+    removeEventListener(type: string, listener: (...args: unknown[]) => void): void {
         const set = this.listeners.get(type);
         if (set) {
             set.delete(listener);
         }
     }
 
-    on(type: string, listener: (...args: any[]) => void): void {
+    on(type: string, listener: (...args: unknown[]) => void): void {
         this.addEventListener(type, listener);
     }
 
-    off(type: string, listener: (...args: any[]) => void): void {
+    off(type: string, listener: (...args: unknown[]) => void): void {
         this.removeEventListener(type, listener);
     }
 
-    addListener(type: string, listener: (...args: any[]) => void): void {
+    addListener(type: string, listener: (...args: unknown[]) => void): void {
         this.addEventListener(type, listener);
     }
 
-    removeListener(type: string, listener: (...args: any[]) => void): void {
+    removeListener(type: string, listener: (...args: unknown[]) => void): void {
         this.removeEventListener(type, listener);
     }
 

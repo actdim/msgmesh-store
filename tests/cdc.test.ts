@@ -145,7 +145,7 @@ describe('Change Data Capture (CDC) Stream Integration', () => {
             id: 'acc-target',
         });
 
-        const sub = filtered$.subscribe((e) => matchingEvents.push(e));
+        const matchingEventPromise = firstValueFrom(filtered$);
 
         // Non-matching collection
         await engine.insertDoc('profiles', 'acc-target', { note: 'wrong collection' });
@@ -154,14 +154,14 @@ describe('Change Data Capture (CDC) Stream Integration', () => {
         // Matching collection and id
         await engine.insertDoc('accounts', 'acc-target', { note: 'match!' });
 
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        const matchingEvent = await matchingEventPromise;
+        matchingEvents.push(matchingEvent);
 
         expect(matchingEvents).toHaveLength(1);
         expect(matchingEvents[0].collection).toBe('accounts');
         expect(matchingEvents[0].id).toBe('acc-target');
         expect(matchingEvents[0].delta).toEqual({ note: 'match!' });
 
-        sub.unsubscribe();
         bridge.dispose();
     });
 
@@ -226,8 +226,9 @@ describe('Change Data Capture (CDC) Stream Integration', () => {
 
         const sub = stream$.subscribe((e) => received.push(e));
 
+        const event1Promise = firstValueFrom(stream$);
         await engine.insertDoc('messages', 'm-1', { text: 'Hello' });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await event1Promise;
         expect(received).toHaveLength(1);
 
         // Unsubscribe from bus CDC stream
@@ -235,7 +236,6 @@ describe('Change Data Capture (CDC) Stream Integration', () => {
 
         // Mutate again after unsubscription
         await engine.insertDoc('messages', 'm-2', { text: 'World' });
-        await new Promise((resolve) => setTimeout(resolve, 20));
         expect(received).toHaveLength(1);
 
         // Disposing bridge shuts down all internal subjects
@@ -246,7 +246,6 @@ describe('Change Data Capture (CDC) Stream Integration', () => {
 
         // Subsequent mutations do not cause unhandled errors or deliveries
         await engine.insertDoc('messages', 'm-3', { text: 'Quiet' });
-        await new Promise((resolve) => setTimeout(resolve, 20));
         expect(received).toHaveLength(1);
     });
 
@@ -257,12 +256,14 @@ describe('Change Data Capture (CDC) Stream Integration', () => {
         const posts: StoreCdcEvent[] = [];
         const comments: StoreCdcEvent[] = [];
 
-        const subAuthors = subscribeCdc(bus, { collection: 'authors' }).subscribe((e) =>
-            authors.push(e)
+        const subAuthors = firstValueFrom(
+            subscribeCdc(bus, { collection: 'authors' }).pipe(take(2), toArray())
         );
-        const subPosts = subscribeCdc(bus, { collection: 'posts' }).subscribe((e) => posts.push(e));
-        const subComments = subscribeCdc(bus, { collection: 'comments' }).subscribe((e) =>
-            comments.push(e)
+        const subPosts = firstValueFrom(
+            subscribeCdc(bus, { collection: 'posts' }).pipe(take(2), toArray())
+        );
+        const subComments = firstValueFrom(
+            subscribeCdc(bus, { collection: 'comments' }).pipe(take(1), toArray())
         );
 
         await Promise.all([
@@ -273,7 +274,14 @@ describe('Change Data Capture (CDC) Stream Integration', () => {
             engine.insertDoc('posts', 'p-2', { title: 'Post Two', authorId: 'a-2' }),
         ]);
 
-        await new Promise((resolve) => setTimeout(resolve, 30));
+        const [authorsEvents, postsEvents, commentsEvents] = await Promise.all([
+            subAuthors,
+            subPosts,
+            subComments,
+        ]);
+        authors.push(...authorsEvents);
+        posts.push(...postsEvents);
+        comments.push(...commentsEvents);
 
         expect(authors).toHaveLength(2);
         expect(posts).toHaveLength(2);
@@ -283,9 +291,6 @@ describe('Change Data Capture (CDC) Stream Integration', () => {
         expect(posts.map((p) => p.id).sort()).toEqual(['p-1', 'p-2']);
         expect(comments[0].id).toBe('c-1');
 
-        subAuthors.unsubscribe();
-        subPosts.unsubscribe();
-        subComments.unsubscribe();
         bridge.dispose();
     });
 
@@ -334,18 +339,20 @@ describe('Change Data Capture (CDC) Stream Integration', () => {
         });
 
         const collectionEvents: StoreCdcEvent[] = [];
-        bus.on({
-            channel: 'STORE.widgets.CHANGED',
-            group: 'out',
-            topic: 'w-100',
-            callback: (msg) => {
-                collectionEvents.push(msg.payload as StoreCdcEvent);
-            },
+        const eventReceived = new Promise<void>((resolve) => {
+            bus.on({
+                channel: 'STORE.widgets.CHANGED',
+                group: 'out',
+                topic: 'w-100',
+                callback: (msg) => {
+                    collectionEvents.push(msg.payload as StoreCdcEvent);
+                    resolve();
+                },
+            });
         });
 
         await engine.insertDoc('widgets', 'w-100', { color: 'blue' });
-
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await eventReceived;
 
         expect(collectionEvents).toHaveLength(1);
         expect(collectionEvents[0].collection).toBe('widgets');
@@ -405,23 +412,26 @@ describe('Change Data Capture (CDC) Stream Integration', () => {
         const bridge = createCdcBridge(engine, bus, { freezeEvents: true });
 
         let subscriberError: unknown = null;
-        bus.on({
-            channel: 'STORE.ENTITY_CHANGED',
-            group: 'out',
-            topic: 'users',
-            callback: (msg) => {
-                const event = msg.payload as StoreCdcEvent;
-                try {
-                    // Attempt to mutate frozen delta
-                    (event.delta as any).name = 'Malicious Hack';
-                } catch (err) {
-                    subscriberError = err;
-                }
-            },
+        const callbackDone = new Promise<void>((resolve) => {
+            bus.on({
+                channel: 'STORE.ENTITY_CHANGED',
+                group: 'out',
+                topic: 'users',
+                callback: (msg) => {
+                    const event = msg.payload as StoreCdcEvent;
+                    try {
+                        // Attempt to mutate frozen delta
+                        (event.delta as any).name = 'Malicious Hack';
+                    } catch (err) {
+                        subscriberError = err;
+                    }
+                    resolve();
+                },
+            });
         });
 
         await engine.insertDoc('users', 'u-secure', { name: 'Original Name' });
-        await new Promise((r) => setTimeout(r, 20));
+        await callbackDone;
 
         expect(subscriberError).toBeInstanceOf(TypeError);
 

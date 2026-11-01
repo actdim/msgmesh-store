@@ -12,9 +12,11 @@ import {
     resolveMutationTarget,
     applyStoreCommand,
     normalizeCommand,
+    buildNestedPathPatch,
     type NormalizedStoreCommand,
     type MutationTarget,
 } from '../core/applyMutation';
+import type { StoreTarget } from '../core/targets';
 
 /**
  * Attaches a persistent store (LiveStoreInstance, LiveCollection, or LiveSqliteEngine)
@@ -23,8 +25,8 @@ import {
  * and origin filtering.
  */
 export function attachStoreBridge(
-    bus: unknown,
-    storeOrCollection: unknown,
+    bus: MsgMeshBusLike,
+    storeOrCollection: StoreTarget | null,
     options: StoreBridgeOptions = {}
 ): StoreBridgeController {
     const channelPrefix = options.channelPrefix ?? 'STORE';
@@ -47,7 +49,7 @@ export function attachStoreBridge(
     const unsubscribers: Array<() => void> = [];
     let sourceSubscription: Subscription | null = null;
 
-    const typedBus = bus as MsgMeshBusLike | null | undefined;
+    const typedBus = bus;
 
     let target: MutationTarget | null = null;
     if (storeOrCollection) {
@@ -164,12 +166,8 @@ export function attachStoreBridge(
     }
 
     // 2. Setup bus command listener & translation
-    if (
-        typedBus &&
-        typeof (typedBus as Record<string, unknown>).on === 'function' &&
-        enableCommands
-    ) {
-        const busOn = (typedBus as Record<string, unknown>).on as (params: unknown) => unknown;
+    if (typedBus && typeof typedBus.on === 'function' && enableCommands) {
+        const busOn = typedBus.on.bind(typedBus);
 
         const handleCommand = (msg: unknown): void => {
             if (disposed || !msg || typeof msg !== 'object') {

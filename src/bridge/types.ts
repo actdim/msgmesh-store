@@ -11,10 +11,12 @@ export type StoreCommandType = 'CREATE' | 'PATCH' | 'DELETE' | 'PATCH_PATH';
  */
 export interface StoreCommandPayload<T = Record<string, unknown>> {
     readonly type?: StoreCommandType;
+    /** @deprecated Use type instead. */
     readonly action?: StoreCommandType;
     readonly collection?: string;
     readonly id: string;
     readonly delta?: Partial<T> | Record<string, unknown>;
+    /** @deprecated Use delta instead. */
     readonly data?: Partial<T> | Record<string, unknown>;
     readonly path?: string;
     readonly value?: unknown;
@@ -81,6 +83,7 @@ export interface StoreBridgeController {
     readonly cdc$: Observable<StoreCdcEvent>;
     readonly errors$: Observable<BridgeErrorEvent>;
     whenIdle(): Promise<void>;
+    /** @deprecated Use dispose() instead. */
     disconnect(): void;
     dispose(): void;
 }

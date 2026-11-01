@@ -3,7 +3,7 @@ protocol: along
 protocol_version: "4.5.4"
 slug: perf-tests-and-types
 type: debt
-status: open
+status: in-progress
 priority: low
 created: 2026-10-31
 updated: 2026-11-01
@@ -29,10 +29,10 @@ Launch position: **8** in the ticket map below. Plan approved by the user on 202
 - REQ-5 Deprecate (keep, normalize internally): `action` (use `type`), `data` (use `delta`), `disconnect` (use `dispose`); remove unused `WorkerHostOptions.channelPrefix`; `isConnected` keeps T6 meaning.
 
 ## Acceptance Criteria
-- [ ] `grep -rn "function buildNestedPathPatch" src` shows exactly 1 definition; `executeStoreMutation`/`executeWorkerMutation` deleted.
-- [ ] `grep -rn "setTimeout(resolve" tests` returns nothing; whole suite runs in < 3 s.
-- [ ] `tsc -b` green with eslint `no-explicit-any: error` on `src/`.
-- [ ] Type test proves `attachStoreBridge(123, ...)` does not compile.
+- [x] `grep -rn "function buildNestedPathPatch" src` shows exactly 1 definition; `executeStoreMutation`/`executeWorkerMutation` deleted.
+- [x] `grep -rn "setTimeout(resolve" tests` returns nothing; whole suite runs in < 3 s.
+- [x] `tsc -b` green with eslint `no-explicit-any: error` on `src/`.
+- [x] Type test proves `attachStoreBridge(123, ...)` does not compile.
 
 ## Plan
 
@@ -61,10 +61,10 @@ Steps
 Tests to add: table-driven `applyMutation` parity across engine/store/collection adapters through both bridge and host; `KeyedSerialQueue` (per-key order, cross-key parallelism, error doesn't break chain, key cleanup); `MutationLedger` eviction; batch with mixed success/failure; CDC suppressed with no subscribers; type test `attachStoreBridge(123, ...)` fails to compile.
 
 Acceptance
-- [ ] `grep -rn "function buildNestedPathPatch" src` shows exactly 1 definition; `executeStoreMutation`/`executeWorkerMutation` deleted.
-- [ ] `grep -rn "setTimeout(resolve" tests` returns nothing; whole suite runs in < 3 s.
-- [ ] `tsc -b` green with eslint `no-explicit-any: error` on `src/`.
-- [ ] Type test proves `attachStoreBridge(123, ...)` does not compile.
+- [x] `grep -rn "function buildNestedPathPatch" src` shows exactly 1 definition; `executeStoreMutation`/`executeWorkerMutation` deleted.
+- [x] `grep -rn "setTimeout(resolve" tests` returns nothing; whole suite runs in < 3 s.
+- [x] `tsc -b` green with eslint `no-explicit-any: error` on `src/`.
+- [x] Type test proves `attachStoreBridge(123, ...)` does not compile.
 Risks: stricter types break downstream `unknown` callers (deprecated overloads); batching is a wire-protocol change (host stays backward compatible).
 
 ## Ticket map and launch order

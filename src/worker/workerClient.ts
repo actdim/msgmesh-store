@@ -1,7 +1,8 @@
-import { Subject, type Observable } from 'rxjs';
+import { Subject, Observable } from 'rxjs';
 import type { StoreCdcEvent } from '../cdc/types';
 import {
     WorkerDeadError,
+    type WorkerBatchRequest,
     type WorkerClientRequest,
     type WorkerClientState,
     type WorkerHostMessage,
@@ -12,9 +13,9 @@ import {
 } from './types';
 import { addPortListener, removePortListener, safelyClone } from './channel';
 
-interface PendingRequest<T = any> {
-    resolve: (value: T) => void;
-    reject: (reason: any) => void;
+interface PendingRequest {
+    resolve: (value: unknown) => void;
+    reject: (reason: unknown) => void;
     timer: ReturnType<typeof setTimeout>;
     type: string;
 }
@@ -39,9 +40,107 @@ export function createWorkerStoreClient(
     const errorsSubject = new Subject<unknown>();
     const pendingRequests = new Map<string, PendingRequest>();
 
+    // Batching state
+    const batchMode = options.batch;
+    const useBatching = Boolean(batchMode && batchMode !== 'none');
+    let flushScheduled = false;
+    const batchQueue: WorkerClientRequest[] = [];
+    const batchRequestsMap = new Map<string, string[]>();
+
+    // CDC subscription refcounting
+    let cdcSubscriberCount = 0;
+    const cdc$ = new Observable<StoreCdcEvent>((subscriber) => {
+        cdcSubscriberCount++;
+        if (cdcSubscriberCount === 1) {
+            try {
+                currentPort.postMessage({ type: 'CDC_SUBSCRIBE' });
+            } catch {
+                // Ignore if port not ready
+            }
+        }
+        const sub = cdcSubject.subscribe(subscriber);
+        return () => {
+            sub.unsubscribe();
+            cdcSubscriberCount--;
+            if (cdcSubscriberCount === 0) {
+                try {
+                    currentPort.postMessage({ type: 'CDC_UNSUBSCRIBE' });
+                } catch {
+                    // Ignore if port closed
+                }
+            }
+        };
+    });
+
     const nextId = (prefix: string): string => {
         idCounter += 1;
         return `${prefix}_${idCounter}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    };
+
+    const flushBatch = (): void => {
+        if (state === 'dead' || state === 'disposed' || batchQueue.length === 0) {
+            batchQueue.length = 0;
+            return;
+        }
+
+        if (batchQueue.length === 1) {
+            const singleReq = batchQueue.shift()!;
+            try {
+                currentPort.postMessage(singleReq);
+            } catch (err) {
+                const reqId = (singleReq as { id: string }).id;
+                const pending = pendingRequests.get(reqId);
+                if (pending) {
+                    clearTimeout(pending.timer);
+                    pendingRequests.delete(reqId);
+                    pending.reject(err);
+                }
+            }
+            return;
+        }
+
+        const reqs = batchQueue.splice(0, batchQueue.length);
+        const batchId = nextId('batch');
+        const itemIds = reqs.map((r) => (r as { id: string }).id);
+        batchRequestsMap.set(batchId, itemIds);
+
+        const batchReq: WorkerBatchRequest = {
+            id: batchId,
+            type: 'BATCH',
+            payload: reqs,
+        };
+
+        try {
+            currentPort.postMessage(batchReq);
+        } catch (err) {
+            batchRequestsMap.delete(batchId);
+            for (const req of reqs) {
+                const reqId = (req as { id: string }).id;
+                const pending = pendingRequests.get(reqId);
+                if (pending) {
+                    clearTimeout(pending.timer);
+                    pendingRequests.delete(reqId);
+                    pending.reject(err);
+                }
+            }
+        }
+    };
+
+    const scheduleFlush = (): void => {
+        if (flushScheduled) {
+            return;
+        }
+        flushScheduled = true;
+        const doFlush = () => {
+            flushScheduled = false;
+            flushBatch();
+        };
+
+        if (batchMode === 'microtask') {
+            queueMicrotask(doFlush);
+        } else if (typeof batchMode === 'function') {
+            batchMode(doFlush);
+        }
     };
 
     const handleClose = (reason: string): void => {
@@ -51,6 +150,8 @@ export function createWorkerStoreClient(
         state = 'dead';
         deadReason = reason;
         initPromise = null;
+        batchQueue.length = 0;
+        batchRequestsMap.clear();
 
         const deadErr = new WorkerDeadError(reason);
         for (const [, pending] of pendingRequests.entries()) {
@@ -81,14 +182,73 @@ export function createWorkerStoreClient(
             return;
         }
 
+        if (hostMsg.type === 'CDC_BATCH') {
+            if (Array.isArray(hostMsg.payload)) {
+                for (const eventItem of hostMsg.payload) {
+                    cdcSubject.next(eventItem);
+                }
+            }
+            return;
+        }
+
         // 2. Worker shutdown / close message from host
         if (hostMsg.type === 'CLOSE') {
             handleClose(hostMsg.reason ?? 'Worker closed');
             return;
         }
 
-        // 3. Error responses
+        // 3. Batch confirmation response
+        if (hostMsg.type === 'BATCH_OK') {
+            if (hostMsg.id) {
+                batchRequestsMap.delete(hostMsg.id);
+            }
+            const results = hostMsg.payload?.results ?? [];
+            for (const item of results) {
+                if (item && item.id && pendingRequests.has(item.id)) {
+                    const pending = pendingRequests.get(item.id)!;
+                    clearTimeout(pending.timer);
+                    pendingRequests.delete(item.id);
+                    if (item.success) {
+                        pending.resolve(item.result);
+                    } else {
+                        const err =
+                            item.error instanceof Error
+                                ? item.error
+                                : typeof item.error === 'object' &&
+                                  item.error !== null &&
+                                  'message' in item.error
+                                ? Object.assign(
+                                      new Error((item.error as { message: string }).message),
+                                      item.error
+                                  )
+                                : new Error(String(item.error || 'Batch item failed'));
+                        pending.reject(err);
+                    }
+                }
+            }
+            return;
+        }
+
+        // 4. Error responses
         if (hostMsg.type === 'ERROR') {
+            if (hostMsg.id && batchRequestsMap.has(hostMsg.id)) {
+                const itemIds = batchRequestsMap.get(hostMsg.id)!;
+                batchRequestsMap.delete(hostMsg.id);
+                const err = new Error(hostMsg.error?.message || 'Worker host error');
+                if (hostMsg.error?.name) {
+                    err.name = hostMsg.error.name;
+                }
+                for (const id of itemIds) {
+                    if (pendingRequests.has(id)) {
+                        const pending = pendingRequests.get(id)!;
+                        clearTimeout(pending.timer);
+                        pendingRequests.delete(id);
+                        pending.reject(err);
+                    }
+                }
+                return;
+            }
+
             if (hostMsg.id && pendingRequests.has(hostMsg.id)) {
                 const pending = pendingRequests.get(hostMsg.id)!;
                 clearTimeout(pending.timer);
@@ -110,7 +270,7 @@ export function createWorkerStoreClient(
             return;
         }
 
-        // 4. Init confirmation
+        // 5. Init confirmation
         if (hostMsg.type === 'INIT_OK') {
             state = 'ready';
             if (pendingRequests.has(hostMsg.id)) {
@@ -122,7 +282,7 @@ export function createWorkerStoreClient(
             return;
         }
 
-        // 5. Command confirmation
+        // 6. Command confirmation
         if (hostMsg.type === 'COMMAND_OK') {
             if (pendingRequests.has(hostMsg.id)) {
                 const pending = pendingRequests.get(hostMsg.id)!;
@@ -133,7 +293,7 @@ export function createWorkerStoreClient(
             return;
         }
 
-        // 6. Query results
+        // 7. Query results
         if (hostMsg.type === 'QUERY_OK') {
             if (pendingRequests.has(hostMsg.id)) {
                 const pending = pendingRequests.get(hostMsg.id)!;
@@ -168,6 +328,8 @@ export function createWorkerStoreClient(
         state = 'dead';
         deadReason = `Worker boundary failure: ${errorMsg}`;
         initPromise = null;
+        batchQueue.length = 0;
+        batchRequestsMap.clear();
 
         for (const [, pending] of pendingRequests.entries()) {
             clearTimeout(pending.timer);
@@ -227,7 +389,7 @@ export function createWorkerStoreClient(
             return Promise.reject(cloneErr);
         }
 
-        const reqId = (req as any).id as string;
+        const reqId = (req as { id: string }).id;
 
         return new Promise<T>((resolve, reject) => {
             const timer = setTimeout(() => {
@@ -240,18 +402,23 @@ export function createWorkerStoreClient(
             }, timeoutMs);
 
             pendingRequests.set(reqId, {
-                resolve,
+                resolve: resolve as (val: unknown) => void,
                 reject,
                 timer,
                 type: req.type,
             });
 
-            try {
-                currentPort.postMessage(req);
-            } catch (err) {
-                clearTimeout(timer);
-                pendingRequests.delete(reqId);
-                reject(err);
+            if (!useBatching || req.type === 'INIT') {
+                try {
+                    currentPort.postMessage(req);
+                } catch (err) {
+                    clearTimeout(timer);
+                    pendingRequests.delete(reqId);
+                    reject(err);
+                }
+            } else {
+                batchQueue.push(req);
+                scheduleFlush();
             }
         });
     };
@@ -315,7 +482,7 @@ export function createWorkerStoreClient(
             return state === 'disposed';
         },
         get cdc$(): Observable<StoreCdcEvent> {
-            return cdcSubject.asObservable();
+            return cdc$;
         },
         get errors$(): Observable<unknown> {
             return errorsSubject.asObservable();
@@ -338,6 +505,17 @@ export function createWorkerStoreClient(
             state = 'idle';
             deadReason = undefined;
             initPromise = null;
+            batchQueue.length = 0;
+            batchRequestsMap.clear();
+
+            if (cdcSubscriberCount > 0) {
+                try {
+                    currentPort.postMessage({ type: 'CDC_SUBSCRIBE' });
+                } catch {
+                    // Ignore
+                }
+            }
+
             return triggerInit();
         },
         async create(
@@ -358,9 +536,11 @@ export function createWorkerStoreClient(
                 id: reqId,
                 type: 'COMMAND',
                 payload: {
+                    type: 'CREATE',
                     action: 'CREATE',
                     collection,
                     docId: id,
+                    delta: data,
                     data,
                     mutationId: opts?.mutationId,
                 },
@@ -384,9 +564,11 @@ export function createWorkerStoreClient(
                 id: reqId,
                 type: 'COMMAND',
                 payload: {
+                    type: 'PATCH',
                     action: 'PATCH',
                     collection,
                     docId: id,
+                    delta,
                     data: delta,
                     mutationId: opts?.mutationId,
                 },
@@ -411,6 +593,7 @@ export function createWorkerStoreClient(
                 id: reqId,
                 type: 'COMMAND',
                 payload: {
+                    type: 'PATCH_PATH',
                     action: 'PATCH_PATH',
                     collection,
                     docId: id,
@@ -437,6 +620,7 @@ export function createWorkerStoreClient(
                 id: reqId,
                 type: 'COMMAND',
                 payload: {
+                    type: 'DELETE',
                     action: 'DELETE',
                     collection,
                     docId: id,
@@ -462,11 +646,16 @@ export function createWorkerStoreClient(
                 },
             });
         },
+        disconnect(): void {
+            this.dispose();
+        },
         dispose(): void {
             if (state === 'disposed') {
                 return;
             }
             state = 'disposed';
+            batchQueue.length = 0;
+            batchRequestsMap.clear();
 
             const disposeErr = new WorkerDeadError('WorkerStoreClient has been disposed.');
             for (const [, pending] of pendingRequests.entries()) {

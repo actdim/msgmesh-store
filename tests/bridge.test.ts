@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { firstValueFrom } from 'rxjs';
 import { take, filter } from 'rxjs/operators';
 import { createMsgBus } from '@actdim/msgmesh/core';
@@ -204,6 +204,11 @@ describe('Store Bridge & Echo Suppression Integration', () => {
 
         const busPublishedEvents: StoreCdcEvent[] = [];
 
+        let resolvePublished!: () => void;
+        const busEventPublished = new Promise<void>((r) => {
+            resolvePublished = r;
+        });
+
         // Subscribe to bus CDC broadcasts
         bus.on({
             channel: 'STORE.ENTITY_CHANGED',
@@ -211,6 +216,7 @@ describe('Store Bridge & Echo Suppression Integration', () => {
             topic: '/.*/',
             callback: (msg) => {
                 busPublishedEvents.push(msg.payload as StoreCdcEvent);
+                resolvePublished();
             },
         });
 
@@ -218,7 +224,8 @@ describe('Store Bridge & Echo Suppression Integration', () => {
 
         // 1. Direct local mutation MUST publish to bus
         const doc = await col.create('c-1', { value: 10 });
-        await new Promise((r) => setTimeout(r, 25));
+        await busEventPublished;
+        await controller.whenIdle();
 
         expect(busPublishedEvents).toHaveLength(1);
         expect(busPublishedEvents[0].id).toBe('c-1');
@@ -242,7 +249,7 @@ describe('Store Bridge & Echo Suppression Integration', () => {
         });
 
         await busCdcReceived;
-        await new Promise((r) => setTimeout(r, 35));
+        await controller.whenIdle();
 
         // Total bus-broadcasted events must remain 1: the bus command did not trigger a bus echo!
         expect(busPublishedEvents).toHaveLength(1);
@@ -253,27 +260,32 @@ describe('Store Bridge & Echo Suppression Integration', () => {
         expect(docC2?.data.value).toBe(20);
     });
 
-    it('REQ-3: EchoTracker sliding window drops duplicate / reflected commands', async () => {
-        const tracker = new EchoTracker(200);
+    it('REQ-3: EchoTracker sliding window drops duplicate / reflected commands', () => {
+        vi.useFakeTimers();
+        try {
+            const tracker = new EchoTracker(200);
 
-        expect(tracker.size).toBe(0);
-        expect(tracker.isEcho('mut-100')).toBe(false);
+            expect(tracker.size).toBe(0);
+            expect(tracker.isEcho('mut-100')).toBe(false);
 
-        tracker.record('mut-100', 'bus');
-        expect(tracker.has('mut-100')).toBe(true);
-        expect(tracker.isEcho('mut-100')).toBe(true);
-        expect(tracker.isEcho('mut-100', 'bus')).toBe(true);
-        expect(tracker.isEcho('mut-100', 'local')).toBe(false);
-        expect(tracker.getOrigin('mut-100')).toBe('bus');
-        expect(tracker.size).toBe(1);
+            tracker.record('mut-100', 'bus');
+            expect(tracker.has('mut-100')).toBe(true);
+            expect(tracker.isEcho('mut-100')).toBe(true);
+            expect(tracker.isEcho('mut-100', 'bus')).toBe(true);
+            expect(tracker.isEcho('mut-100', 'local')).toBe(false);
+            expect(tracker.getOrigin('mut-100')).toBe('bus');
+            expect(tracker.size).toBe(1);
 
-        // Sliding window expiration
-        await new Promise((r) => setTimeout(r, 250));
-        expect(tracker.isEcho('mut-100')).toBe(false);
-        expect(tracker.has('mut-100')).toBe(false);
-        expect(tracker.size).toBe(0);
+            // Sliding window expiration via fake timers
+            vi.advanceTimersByTime(250);
+            expect(tracker.isEcho('mut-100')).toBe(false);
+            expect(tracker.has('mut-100')).toBe(false);
+            expect(tracker.size).toBe(0);
 
-        tracker.dispose();
+            tracker.dispose();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('drops echoed commands with identical mutationId within suppression window', async () => {
@@ -326,7 +338,7 @@ describe('Store Bridge & Echo Suppression Integration', () => {
             },
         });
 
-        await new Promise((r) => setTimeout(r, 40));
+        await controller.whenIdle();
 
         // Duplicate command was dropped by echoTracker, document value not updated to 999
         const unchangedDoc = await col.get('m-1');
@@ -389,7 +401,7 @@ describe('Store Bridge & Echo Suppression Integration', () => {
             },
         });
 
-        await new Promise((r) => setTimeout(r, 30));
+        await controller.whenIdle();
         const doc = await col.get('n-1');
         expect(doc).toBeNull();
     });
@@ -510,6 +522,10 @@ describe('Store Bridge & Echo Suppression Integration', () => {
         expect(busEvent.origin).toBe('local');
 
         // Forward the CDC event to Store 2 as a command (simulating sync pipeline)
+        const store2EventPromise = firstValueFrom(
+            controller2.cdc$.pipe(filter((e) => e.id === 'msg-1'))
+        );
+
         await bus.send({
             channel: 'SYNC.COMMAND',
             group: 'in',
@@ -523,7 +539,8 @@ describe('Store Bridge & Echo Suppression Integration', () => {
             },
         });
 
-        await new Promise((r) => setTimeout(r, 40));
+        await store2EventPromise;
+        await controller2.whenIdle();
 
         // Store 2 document was updated
         const doc2 = await col2.get('msg-1');
@@ -548,6 +565,10 @@ describe('Store Bridge & Echo Suppression Integration', () => {
             }
         });
 
+        const updateCdcPromise = firstValueFrom(
+            controller.cdc$.pipe(filter((e) => e.id === 'concurrent-doc-1' && e.type === 'update'))
+        );
+
         await Promise.all([
             bus.send({
                 channel: 'STORE.COMMAND',
@@ -571,7 +592,7 @@ describe('Store Bridge & Echo Suppression Integration', () => {
             }),
         ]);
 
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await updateCdcPromise;
         await controller.whenIdle();
 
         const doc = await store.engine.getDoc('items', 'concurrent-doc-1');
@@ -585,17 +606,22 @@ describe('Store Bridge & Echo Suppression Integration', () => {
 
     it('REQ-1: PATCH on a slowed target followed immediately by DELETE results in deleted document', async () => {
         let storedDoc: Record<string, unknown> | null = null;
+        let resolveGate!: () => void;
+        const gate = new Promise<void>((r) => {
+            resolveGate = r;
+        });
+
         const slowTarget = {
             async get() {
                 return storedDoc;
             },
             async insert(_col: string, _id: string, data: Record<string, unknown>) {
-                await new Promise((resolve) => setTimeout(resolve, 30));
+                await gate;
                 storedDoc = { ...data };
                 return storedDoc;
             },
             async patch(_col: string, _id: string, data: Record<string, unknown>) {
-                await new Promise((resolve) => setTimeout(resolve, 30));
+                await gate;
                 storedDoc = { ...storedDoc, ...data };
                 return storedDoc;
             },
@@ -627,6 +653,7 @@ describe('Store Bridge & Echo Suppression Integration', () => {
             },
         });
 
+        resolveGate();
         await Promise.all([p1, p2]);
         await controller.whenIdle();
 
@@ -708,6 +735,12 @@ describe('Store Bridge & Echo Suppression Integration', () => {
         const controller = attachStoreBridge(bus, store);
         const sharedCorrelationId = 'batch-req-xyz';
 
+        const step2CdcPromise = firstValueFrom(
+            controller.cdc$.pipe(
+                filter((e) => e.id === 'corr-doc-1' && (e.delta as { step?: number })?.step === 2)
+            )
+        );
+
         await bus.send({
             channel: 'STORE.COMMAND',
             group: 'in',
@@ -732,7 +765,7 @@ describe('Store Bridge & Echo Suppression Integration', () => {
             },
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await step2CdcPromise;
         await controller.whenIdle();
 
         const doc = await store.engine.getDoc('items', 'corr-doc-1');
@@ -772,8 +805,6 @@ describe('Store Bridge & Echo Suppression Integration', () => {
         await controller.whenIdle();
         expect(executionCount).toBe(1);
 
-        await new Promise((resolve) => setTimeout(resolve, 50));
-
         await bus.send({
             channel: 'STORE.COMMAND',
             group: 'in',
@@ -786,7 +817,6 @@ describe('Store Bridge & Echo Suppression Integration', () => {
             },
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 20));
         await controller.whenIdle();
 
         expect(executionCount).toBe(1);
@@ -899,16 +929,16 @@ describe('Store Bridge & Echo Suppression Integration', () => {
             },
         });
 
+        const storeBUpdatedPromise = firstValueFrom(
+            bridgeB.cdc$.pipe(filter((e) => e.id === 'doc-1' && (e.delta as { v?: number })?.v === 10))
+        );
+
         // Perform 3 distinct local writes on Store A
         await storeA.engine.insertDoc('docs', 'doc-1', { v: 1 });
         await storeA.engine.insertDoc('docs', 'doc-2', { v: 2 });
         await storeA.engine.patchDoc('docs', 'doc-1', { v: 10 });
 
-        await bridgeA.whenIdle();
-        await bridgeB.whenIdle();
-
-        // Wait for the relay microtasks to settle
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await storeBUpdatedPromise;
         await bridgeA.whenIdle();
         await bridgeB.whenIdle();
 
