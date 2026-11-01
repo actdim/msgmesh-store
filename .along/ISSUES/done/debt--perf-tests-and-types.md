@@ -3,7 +3,8 @@ protocol: along
 protocol_version: "4.5.4"
 slug: perf-tests-and-types
 type: debt
-status: in-progress
+status: done
+completed: 2026-11-01
 priority: low
 created: 2026-10-31
 updated: 2026-11-01
