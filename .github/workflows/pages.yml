@@ -1,0 +1,67 @@
+name: Deploy docs to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'llms.txt'
+      - 'llms-full.txt'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The package devDependencies use pnpm catalogs and unpublished @actdim siblings,
+      # so a standalone install fails outside the monorepo. The docs only need VitePress.
+      - name: Install docs toolchain
+        run: |
+          TOOLS="$RUNNER_TEMP/docs-tools"
+          mkdir -p "$TOOLS"
+          cd "$TOOLS"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund vitepress@^1.6.4 vitepress-plugin-mermaid@^2.0.17 mermaid@^11.4.1
+          ln -s "$TOOLS/node_modules" "$GITHUB_WORKSPACE/node_modules"
+
+      - name: Copy root files to public
+        run: |
+          mkdir -p docs/public
+          cp -f llms.txt docs/public/llms.txt 2>/dev/null || true
+          cp -f llms-full.txt docs/public/llms-full.txt 2>/dev/null || true
+
+      - name: Build documentation
+        run: node_modules/.bin/vitepress build docs
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .dist-docs
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

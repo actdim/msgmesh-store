@@ -7,7 +7,6 @@ agent: antigravity
 branch: main
 commit: 0b615db
 summary: 'feat(msgmesh-store): implement CDC stream integration with typed message bus'
-milestone: v2.0.0-along-transition
 issues_advanced: []
 issues_completed: [task--cdc-stream-integration]
 decisions: []

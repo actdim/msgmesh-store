@@ -12,7 +12,7 @@
     "bugs": {
         "url": "https://github.com/actdim/msgmesh-store/issues"
     },
-    "homepage": "https://github.com/actdim/msgmesh-store/#readme",
+    "homepage": "https://actdim.github.io/msgmesh-store/",
     "keywords": [
         "typescript",
         "msgmesh",
@@ -29,9 +29,22 @@
     ],
     "files": [
         "dist",
+        "docs",
+        "!docs/.vitepress",
         "README.md",
-        "LICENSE"
+        "LICENSE",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "llms.txt",
+        "llms-full.txt"
     ],
+    "ai": {
+        "instructions": "./AGENTS.md",
+        "docs": "./docs",
+        "llms": "./llms.txt",
+        "llms-full": "./llms-full.txt"
+    },
+    "llms": "./llms.txt",
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
@@ -71,7 +84,10 @@
         "build": "tsc -b tsconfig.json && vite build",
         "typecheck": "tsc -b tsconfig.json",
         "format": "prettier --write .",
-        "format:check": "prettier --check ."
+        "format:check": "prettier --check .",
+        "docs:dev": "vitepress dev docs",
+        "docs:build": "vitepress build docs",
+        "docs:preview": "vitepress preview docs"
     },
     "peerDependencies": {
         "@actdim/livestruct": ">=1.12.0",
@@ -95,6 +111,9 @@
         "vite": "^6.2.1",
         "vite-plugin-dts": "^4.5.4",
         "vite-tsconfig-paths": "^5.1.4",
-        "vitest": "^3.0.9"
+        "vitest": "^3.0.9",
+        "mermaid": "^11.4.1",
+        "vitepress": "^1.6.4",
+        "vitepress-plugin-mermaid": "^2.0.17"
     }
 }

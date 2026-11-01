@@ -31,9 +31,9 @@ If LiveStore already synchronizes state across browser tabs via SQLite and `Broa
 2. **Change Data Capture (CDC) for Decoupled Services:**
    Decoupled modules (audit logs, analytics, minimaps, cloud sync watermarks) need to react when database records change, without holding direct class instances or query subscriptions to the underlying documents.
 3. **Command Bus (CQRS Pipeline):**
-   UI toolbars emit domain intents (`cad.command.extrude_face`) rather than mutating database tables directly. The command bus validates topological constraints before committing to storage.
+   UI toolbars emit domain intents (`cad.command.extrude_face`) rather than mutating database tables directly. The store bridge normalizes and validates command payloads (`STORE.COMMAND`) and serializes them per document before committing to storage; domain-level validation stays in your own bus handlers.
 4. **Echo Suppression (Feedback Loop Protection):**
-   When a document change emits a bus event and a bus listener triggers a patch, an infinite loop can easily form. The bridge includes built-in origin tracking (`local`, `remote`, `bus`) and debounce guards.
+   When a document change emits a bus event and a bus listener triggers a patch, an infinite loop can easily form. The bridge includes built-in origin tracking (`local`, `remote`, `bus`) and a deterministic, count-bounded mutation ledger: changes applied from bus commands are never republished to the bus.
 
 ---
 
@@ -51,7 +51,7 @@ If LiveStore already synchronizes state across browser tabs via SQLite and `Broa
 ## 3. Quick Code Example
 
 ```typescript
-import { createMsgBus } from '@actdim/msgmesh';
+import { createMsgBus } from '@actdim/msgmesh/core';
 import { attachStoreBridge } from '@actdim/msgmesh-store';
 import { createLiveStruct } from '@actdim/livestruct';
 
@@ -73,9 +73,12 @@ bridge.cdc$.subscribe((event) => {
 });
 
 // 4. Remote or worker dispatches command over bus
-bus.send({
-    channel: 'PARTS.PATCH',
-    payload: { id: 'part-101', delta: { color: 'green' } },
+//    (the bridge listens on PARTS.COMMAND and PARTS.parts.COMMAND)
+await bus.send({
+    channel: 'PARTS.COMMAND',
+    group: 'in',
+    topic: 'parts',
+    payload: { type: 'PATCH', id: 'part-101', delta: { color: 'green' } },
 });
 ```
 
@@ -83,7 +86,7 @@ bus.send({
 
 ## 4. Architecture Overview
 
-```
+```text
   [ Local Forms / Dynstruct UI ]         [ Decoupled Services / Minimap / Cloud ]
                 |                                          |
         Direct MobX Access                         Listen to Bus Channels
@@ -112,35 +115,1607 @@ bus.send({
 pnpm add @actdim/msgmesh-store @actdim/msgmesh @actdim/livestruct @actdim/utico rxjs
 ```
 
+`@actdim/livestruct` is an optional peer: any object matching the `StoreTarget` interface can be used instead.
+
+---
+
+## 6. Documentation
+
+Full documentation site: [https://actdim.github.io/msgmesh-store/](https://actdim.github.io/msgmesh-store/)
+
+| Section | Description |
+|---|---|
+| [**01. Overview & Key Advantages**](./docs/topic--01-overview-and-advantages.md) | What the library solves, when to use it, entry points. |
+| [**02. Core Concepts**](./docs/topic--02-core-concepts.md) | CDC events, CDC bridge, store bridge, mutation ledger, keyed queue, targets, worker transport. |
+| [**03. Architecture & Wiring**](./docs/topic--03-architecture-and-wiring.md) | Command and change data flow, echo suppression, bus topology, worker protocol diagrams. |
+| [**04. Integration Guide**](./docs/topic--04-integration-guide.md) | Installation, peers, wiring with msgmesh and livestruct, Web Worker setup, batching, testing. |
+| [**05. API Reference**](./docs/topic--05-api-reference.md) | Every public export per entry point with signatures and options. |
+| [System Architecture](./docs/topic--architecture.md) | Layered architecture summary. |
+| [Domain Model](./docs/topic--domain-model.md) | Key types: CDC events, commands, targets, worker protocol. |
+| [Setup & Workflow](./docs/topic--setup-and-workflow.md) | Scripts, tests and development inside the mempart monorepo. |
+| [License](./docs/topic--license.md) | MIT license. |
+
+---
+
+## Document: AGENTS.md (Agent Conventions & Protocol)
+
+<!-- BEGIN ALONG-PROTOCOL root (managed by along-init - do not edit by hand) -->
+# ALONG-PROTOCOL v4.5.4
+
+This repo carries its own agent context, provider-agnostically. Follow it every session, whatever tool you are. This is the core; procedures (completion checklist, doc routing, merges, along-team, tool-use rules) live in `docs/topic--along-protocol.md` - pull the section you need via `/along-kb-search`. A gate's error message carries its detail.
+
+## Where state lives
+- **Nearest wins**: any folder may carry its own `AGENTS.md` + `.along/`; use the NEAREST for the area you work in. Nearest `.along/` > higher-level `.along/` > global config. Only a nested `.git` or a user-run `along init` makes a subproject.
+- **Read at session start** (not auto-loaded): `.along/ISSUES.md`, `.along/CONSTRAINTS.md`, your issue `.along/ISSUES/<type>--<slug>.md`; when relevant `.along/VISION.md`, `.along/GLOSSARY.md`. They reflect the state WHEN WRITTEN - verify named files/APIs/flags against the code.
+- **Entities**: issues (`feat|bug|debt|task|docs|spike`), ADRs (`.along/DECISIONS/`, never edited - superseded), milestones, sessions. Keys `<type>--<slug>`, referenced by key, never by path; schemas in `docs/topic--domain-model.md`. Create them from intent unprompted (build/fix -> issue, blocked -> issue tagged `risk`, compare -> `spike` issue, release -> milestone).
+- **Projections** (`ISSUES.md`, `DECISIONS.md`, `CONSTRAINTS.md`, `docs/INDEX.md`) are compiled: on conflict take either side and re-run the sync.
+
+## Anchor work to an issue
+1. Find or create the issue with `status: in-progress`; `along start <slug>` binds this session.
+2. Source edits unlock after the user approves the plan (`EnterPlanMode` -> `ExitPlanMode`, or `along plan approve --plan-file <path>` after their explicit yes). Questions get read-only answers; 1-line typo/comment edits are exempt.
+3. Commit via `/along-commit`: bound to the slug, no AI `Co-Authored-By:` trailers.
+4. Finish with the completion checklist, ending in `along wrap <slug> --summary "..." (--decisions <ADR...> | --no-decisions)`.
+
+## Gates
+Runtime hooks enforce these where installed; elsewhere (`along doctor` shows the level) self-apply every one and use the `along` CLI instead of raw tools.
+- [gate: require-active-issue] [gate: require-plan-approval] - no source edit without an in-progress issue and an approved plan.
+- [gate: subproject-boundary] - a subproject's entities go in ITS `.along/`; cross-subproject work needs an issue in each, or a root umbrella with `parent:` children.
+- [gate: workspace-containment] - read/write inside the workspace (plus temp); other roots need `allowed_roots`; never credential stores.
+- [gate: projection-protection] - never hand-edit or hand-merge projections.
+- [gate: commit-issue-binding] - every commit names the active issue.
+- [gate: issue-lifecycle] [gate: entity-reference-integrity] [gate: entity-deletion-protection] - close via `along wrap` / `along issue done`; rename or supersede, never delete a referenced entity.
+- [gate: doc-manual-lock] - `write_policy: manual` docs change only under a `docs--<slug>` issue.
+- [gate: rule-pack-protection] - never edit `.along/rules/**/*.md` (`along rules attach` owns them).
+- [gate: doc-routing-compliance] - ADR vs `README.md` vs `docs/topic--*.md` routing tree.
+- [gate: untracked-exports] - dashboards and `.along/diagnostics/` stay out of Git.
+- [gate: cli_safety] - file content via file tools, never heredocs or `python -c`; no global installs.
+- [gate: team-step-active] [gate: team-reviews-before-stop] - an `along-team` blackboard holds you to its step loop.
+- [gate: test_before_stop] [gate: wrap_before_stop] [gate: projection_sync_before_stop] - before stopping: tests green, session wrapped, projections synced.
+- [gate: unresolved_gate_denial] - a denied tool call is redone within the gate's rules or told to the user (`along gates ack`), never dropped silently; closing waits for their reply.
+- Commit-time (`along lint`, pre-commit + CI): ASCII typography, fence languages, relative links, no `docs/` -> `.along/` links, Windows-safe names, no secrets, no stubs.
+- Bypass is the user's call: `-n`, `--force-reason`, `scratch fallback` need `--reason` after their reply; recorded in `along gates stats`.
+
+## Judgment rules
+- Ground facts in code, `README.md` and `docs/`; no generic placeholders. Query `/along-kb-search` before reading whole docs; update affected `docs/topic--*.md` after non-trivial changes.
+- Use `/along-test`, `/along-build`, `/along-dev` before raw commands, with quiet flags. Review your diff and blast radius (`along graph-impact`).
+- Never delete or truncate docs, comments or code unless told; no stubs; check `git diff --stat` after batch edits. Verify written files parse. Tests stay hermetic.
+- Scope > 3 files, crossing subsystems or refactoring core engines: route to `along-team`; plans MUST declare `Execution Mode: Direct` or `Role-Based`.
+- Treat the `along` CLI as a black box (`along <cmd> --help`, no engine source outside the Along repo); report its errors verbatim.
+<!-- END ALONG-PROTOCOL -->
+
+## Project specifics
+
+<!-- BEGIN ALONG-RULES -->
+See the following engineering guidelines:
+- `[languages/typescript.md](.along/rules/languages/typescript.md)`
+- `[platforms/web.md](.along/rules/platforms/web.md)`
+<!-- END ALONG-RULES -->
+
+- **Package**: `@actdim/msgmesh-store` - bridge between the `@actdim/msgmesh` bus and persistent stores (LiveStruct / LiveStore): store bridge for command channels (`<prefix>.COMMAND`), CDC publishing (`<prefix>.ENTITY_CHANGED`), ledger-based echo suppression (`MutationLedger`), per-entity ordering (`KeyedSerialQueue`), and a worker transport (`attachWorkerStoreHost` / worker client).
+- **Entry points**: `.` (`src/index.ts`), `./cdc`, `./bridge`, `./worker`. ESM only. Peers: `@actdim/msgmesh`, `@actdim/utico`, `rxjs`, optional `@actdim/livestruct`; runtime imports only `rxjs`, the rest is structural typing.
+- **Commands** (package folder): `pnpm run build`, `pnpm run typecheck`, `pnpm run test` (Vitest node), `pnpm run docs:build` (VitePress, published to https://actdim.github.io/msgmesh-store/ by `.github/workflows/pages.yml`).
+- **Knowledge Base**: `docs/INDEX.md`; regenerate `docs/INDEX.md`, `llms.txt` and `llms-full.txt` with `along kb-sync <absolute package path>` after doc changes.
+- **Versioning**: submodule of the mempart pnpm monorepo under one unified version; never bump `package.json` here in isolation (mempart `pnpm run version:sync <version>` only).
+
+---
+
+## Document: docs/topic--01-overview-and-advantages.md (Overview & Key Advantages)
+
+# Overview & Key Advantages
+
+[<- Back to README](../README.md) | [Next: 02. Core Concepts ->](./topic--02-core-concepts.md)
+
+---
+
+## What is @actdim/msgmesh-store?
+
+**`@actdim/msgmesh-store`** is a small TypeScript library that connects a typed message bus (`@actdim/msgmesh`) with a document store (`@actdim/livestruct` or any structurally compatible engine). It provides three building blocks:
+
+- **Store bridge** (`attachStoreBridge`) - listens for mutation commands on bus channels, applies them to the store, and republishes the resulting store changes as normalized Change Data Capture (CDC) events, without feeding its own writes back into the bus.
+- **CDC stream** (`toStoreCdcObservable`, `createCdcBridge`, `publishCdcToBus`, `subscribeCdc`, `filterCdc`) - turns any engine, collection or observable into an RxJS stream of frozen `StoreCdcEvent` records and optionally publishes them on `<prefix>.ENTITY_CHANGED`.
+- **Worker transport** (`createWorkerStoreClient`, `attachWorkerStoreHost`) - runs the store inside a Web Worker (or behind any `postMessage` port) and exposes a promise-based client on the main thread with request timeouts, lifecycle states, optional batching and a refcounted CDC stream.
+
+The library imports only `rxjs` at runtime. The bus, the store and the port are all accepted through structural interfaces (`MsgMeshBusLike`, `StoreTarget`, `WorkerMessagePortLike`), so tests can pass plain objects and production code can pass a real `createMsgBus()` bus and a `createLiveStruct()` store.
+
+---
+
+## Why is this Integration Needed?
+
+A local-first store already handles persistence and, with LiveStruct, cross-tab synchronization. It does not handle *communication*. A bus is needed when interactions cross execution or module boundaries:
+
+1. **Worker boundary crossing.** When SQLite and heavy computation run in a Web Worker, the UI thread cannot hold the live document proxies. The worker transport serializes commands (`CREATE`, `PATCH`, `PATCH_PATH`, `DELETE`), raw SQL queries and CDC deltas across `postMessage` using the structured clone algorithm.
+2. **CDC for decoupled services.** Audit logs, analytics, minimaps and sync watermarks want to know that a record changed without importing the collection or holding a query subscription. They subscribe to `STORE.ENTITY_CHANGED` (or a filtered `subscribeCdc(...)` stream) instead.
+3. **Command bus.** UI code can emit store intents on `STORE.COMMAND` instead of calling the store directly. The bridge normalizes the payload, serializes writes per document and reports failures on `errors$`.
+4. **Feedback loop protection.** When a store change is published on the bus and a bus listener writes back to the store, a loop forms easily. The bridge tracks every bus-applied mutation in a bounded `MutationLedger`, so changes that originated from the bus are never republished to it.
+
+---
+
+## When to Use (and When NOT to Use)
+
+| Scenario | Recommended approach | Reason |
+|---|---|---|
+| Local UI form in the same thread | Direct LiveStruct document access | Direct property access is faster, fully typed and avoids string channels. |
+| UI thread to a store hosted in a Web Worker | `createWorkerStoreClient` + `attachWorkerStoreHost` | Typed request/response protocol with timeouts and a CDC stream. |
+| Decoupled services (audit, analytics, sync) | `attachStoreBridge` or `createCdcBridge` + `subscribeCdc` | Consumers listen to `STORE.ENTITY_CHANGED` without coupling to models. |
+| Remote or cross-module writers | `attachStoreBridge` command channels | Commands are validated, serialized per document and deduplicated by `mutationId`. |
+| High-frequency transient interactions (60 fps drag) | Plain in-memory `@actdim/msgmesh` messages | Transient events do not need to touch the store at all. |
+
+---
+
+## Key Advantages
+
+### 1. Deterministic echo suppression
+- Every command applied through the bridge is recorded in a count-bounded `MutationLedger` (default capacity 4096).
+- CDC events whose `mutationId` is in the ledger are emitted on the local `cdc$` stream but never republished to the bus.
+- No time windows or debounce timers are involved; the old time-based `EchoTracker` is kept only for backwards compatibility and is deprecated.
+
+### 2. Per-document ordering without global locks
+- `KeyedSerialQueue` serializes commands per `collection:id` key in arrival order while unrelated documents execute concurrently.
+- A failed command never blocks later commands for the same key.
+- `whenIdle()` resolves when every queued command has settled - convenient in tests and shutdown paths.
+
+### 3. One mutation semantics everywhere
+- Both the bridge and the worker host call the same `applyStoreCommand` function, so `CREATE`, `PATCH`, `PATCH_PATH` and `DELETE` behave identically on the bus and across the worker boundary.
+- `resolveMutationTarget` adapts a LiveStruct store instance, a low-level engine, a single collection or a custom object into one `MutationTarget` interface using only public members.
+
+### 4. Safe, immutable CDC events
+- CDC deltas are cloned and deep-frozen by default (`freezeEvents`), so a subscriber cannot corrupt store state or another subscriber's view.
+- Malformed source items are dropped (and reported through `onInvalid`) without terminating the stream.
+- `bus.send` failures are caught by `safeSend` and routed to `errors$` instead of becoming unhandled rejections.
+
+### 5. Explicit worker lifecycle
+- Client state is one of `idle`, `initializing`, `ready`, `dead`, `disposed`; calls on a dead or disposed client fail immediately with `WorkerDeadError`.
+- Pending requests are rejected on timeout, on a `CLOSE` message, on a port `close` event or on a fatal `error` event.
+- `reconnect(port?)` resets a dead client and re-establishes the handshake (and CDC subscription) on the same or a new port.
+
+### 6. Hermetic testing
+- `createMessageChannelPair()` returns two connected `InMemoryMessagePort` instances that behave like asynchronous `postMessage` ports, so the full worker protocol runs in Node without DOM globals.
+- Every public entry point accepts structural types, so a mock bus is just an object with `send` and `on`.
+
+---
+
+## Package Entry Points
+
+| Import path | Contents |
+|---|---|
+| `@actdim/msgmesh-store` | Everything below plus the shared `core` module (`MutationLedger`, `KeyedSerialQueue`, `applyStoreCommand`, targets). |
+| `@actdim/msgmesh-store/bridge` | `attachStoreBridge`, bridge types, deprecated `EchoTracker`. |
+| `@actdim/msgmesh-store/cdc` | CDC types and stream helpers. |
+| `@actdim/msgmesh-store/worker` | Worker client, host, wire types and in-memory channel. |
+
+---
+
+## Related Libraries
+
+- **[@actdim/msgmesh](https://github.com/actdim/msgmesh)** - the typed message bus (`createMsgBus` from `@actdim/msgmesh/core`).
+- **[@actdim/livestruct](https://actdim.github.io/livestruct/)** - local-first document store (`createLiveStruct`, `createLiveEngine`) whose engines expose the `cdc$` stream consumed here.
+
+---
+
+[<- Back to README](../README.md) | [Next: 02. Core Concepts ->](./topic--02-core-concepts.md)
+
+---
+
+## Document: docs/topic--02-core-concepts.md (Core Concepts)
+
+# Core Concepts
+
+[<- Back to 01. Overview & Advantages](./topic--01-overview-and-advantages.md) | [Next: 03. Architecture & Wiring ->](./topic--03-architecture-and-wiring.md)
+
+---
+
+This page explains each building block on its own. How they are combined is covered in [03. Architecture & Wiring](./topic--03-architecture-and-wiring.md); exact signatures are in [05. API Reference](./topic--05-api-reference.md).
+
+## 1. CDC Events (`StoreCdcEvent`)
+
+Every store change is normalized into one immutable record:
+
+```typescript
+interface StoreCdcEvent<T = Record<string, unknown>> {
+    readonly type: 'insert' | 'update' | 'delete'; // StoreCdcType
+    readonly collection: string;
+    readonly id: string;
+    readonly delta: Partial<T>;
+    readonly origin: 'local' | 'remote' | 'bus'; // StoreCdcOrigin
+    readonly timestamp: number;
+    readonly mutationId?: string;
+    readonly sourceId?: string;
+}
+```
+
+- **`origin`** says where the change came from: `local` (direct store or engine write), `remote` (replication / sync), `bus` (applied from a bus command).
+- **`mutationId`** identifies the write. The bridge uses it for echo suppression and deduplication.
+- **`sourceId`** is stamped by a store bridge on the events it publishes to the bus (see section 3).
+
+### Normalizing a source: `toStoreCdcObservable`
+
+`toStoreCdcObservable(source, options)` accepts many shapes and returns an `Observable<StoreCdcEvent>`:
+
+| Source shape | How the stream is found |
+|---|---|
+| An RxJS `Observable` | Used directly. |
+| Object with `engine` (LiveStruct store instance) | Recurses into `source.engine`. |
+| Object with `tableName` and `cdc$` (engine access) | Uses `cdc$`; collection defaults to `tableName`. |
+| Object with `name` (collection) | Uses `cdc$`, `engineAccess.cdc$` or `engine.cdc$`; collection defaults to `name`. |
+| Object with an observable `cdc$` | Uses `cdc$`. |
+| Object with `cdcSubject.asObservable()` | Uses that observable. |
+
+For each raw item it maps `type` (unknown values become `update`), resolves `collection` (item, inferred, `defaultCollection`, then `'default'`), reads `delta` or `data`, falls back to `defaultOrigin` (default `local`) and `Date.now()`. Non-object items are passed to `onInvalid` and dropped - the stream keeps running. When `freezeEvents` is not `false`, the delta is cloned (`safeClone`) and the event is deep-frozen (`deepFreeze`).
+
+```typescript
+import { Subject } from 'rxjs';
+import { toStoreCdcObservable } from '@actdim/msgmesh-store/cdc';
+
+const raw$ = new Subject<unknown>();
+const cdc$ = toStoreCdcObservable(raw$, {
+    defaultCollection: 'users',
+    onInvalid: (err, item) => console.warn('dropped CDC item', item, err),
+});
+
+cdc$.subscribe((e) => console.log(e.type, e.collection, e.id, e.delta));
+raw$.next({ type: 'insert', id: 'u-1', delta: { name: 'Alice' } });
+```
+
+### Filtering: `filterCdc`, `filterCollection`, `filterEntity`
+
+RxJS operators over `StoreCdcEvent` streams:
+
+```typescript
+import { filterCdc, filterCollection, filterEntity } from '@actdim/msgmesh-store/cdc';
+
+cdc$.pipe(filterCollection('orders'));
+cdc$.pipe(filterEntity('orders', 'ord-42'));
+cdc$.pipe(filterCdc({ collection: 'orders', originFilter: ['remote'], typeFilter: ['delete'] }));
+```
+
+Empty `originFilter` / `typeFilter` arrays mean "no filter".
+
+## 2. CDC Bridge (`createCdcBridge`)
+
+A CDC bridge is a one-way, disposable connection from a store source to an optional bus. It is the right tool when you only need to *publish* store changes and do not accept bus commands.
+
+```typescript
+import { createMsgBus } from '@actdim/msgmesh/core';
+import { createLiveEngine } from '@actdim/livestruct';
+import { createCdcBridge, subscribeCdc } from '@actdim/msgmesh-store/cdc';
+
+const bus = createMsgBus();
+const engine = await createLiveEngine({ name: 'app_db', forceMemory: true });
+
+const cdc = createCdcBridge(engine, bus, { channelPrefix: 'STORE' });
+
+subscribeCdc(bus, { channelPrefix: 'STORE', collection: 'accounts' })
+    .subscribe((e) => console.log('account changed', e.id, e.delta));
+
+await engine.insertDoc('accounts', 'acc-1', { balance: 10 });
+cdc.dispose();
+```
+
+- Events are published on `<prefix>.ENTITY_CHANGED` (group `out`, topic = collection). With `secondaryChannelPerCollection: true` they are also published on `<prefix>.<collection>.CHANGED` (topic = entity id).
+- With `collection` set, only that collection's events pass.
+- `bus` may be `null` - then the bridge just exposes `cdc$`.
+- `isConnected` turns `false` when the source completes or errors, or after `dispose()`.
+
+`publishCdcToBus(bus, cdc$, options)` is the lower-level function that `createCdcBridge` uses; it returns a plain RxJS `Subscription`. `subscribeCdc(bus, options)` is its consumer-side counterpart: a cold `Observable` that registers a bus listener on subscribe and aborts it on unsubscribe.
+
+## 3. Store Bridge (`attachStoreBridge`)
+
+The store bridge is bidirectional: it does everything a CDC bridge does and additionally accepts mutation commands from the bus.
+
+```typescript
+import { createMsgBus } from '@actdim/msgmesh/core';
+import { createLiveStruct } from '@actdim/livestruct';
+import { attachStoreBridge } from '@actdim/msgmesh-store/bridge';
+
+const bus = createMsgBus();
+const store = await createLiveStruct({ name: 'workspace_db' });
+
+const bridge = attachStoreBridge(bus, store, { channelPrefix: 'STORE' });
+
+bridge.cdc$.subscribe((e) => console.log(e.origin, e.type, e.collection, e.id));
+bridge.errors$.subscribe((err) => console.error(err.kind, err.error));
+
+await bus.send({
+    channel: 'STORE.COMMAND',
+    group: 'in',
+    topic: 'users',
+    payload: { type: 'CREATE', id: 'u-100', delta: { name: 'Alice' } },
+});
+
+await bridge.whenIdle();
+bridge.dispose();
+```
+
+### Command channels
+
+The bridge listens (groups `in` and `out`, any topic) on:
+- `<prefix>.COMMAND`
+- `<prefix>.<boundCollection>.COMMAND` - only when the bridge is bound to a collection (through the `collection` option or because the target is a single collection).
+
+### Command payload (`StoreCommandPayload`)
+
+| Field | Meaning |
+|---|---|
+| `type` | `CREATE`, `PATCH`, `DELETE` or `PATCH_PATH`. `INSERT` / `UPDATE` are accepted as aliases. Deprecated alias field: `action`. |
+| `id` | Document id (`docId` and `entityId` are also accepted). Required. |
+| `collection` | Target collection. Optional, see resolution below. |
+| `delta` | Fields to write. Deprecated alias: `data`. |
+| `path`, `value` | For `PATCH_PATH`: dot path such as `settings.theme` and its new value. |
+| `origin` | Origin recorded for the write (default `options.defaultOrigin`, then `bus`). |
+| `mutationId` | Deduplication key. A fresh `crypto.randomUUID()` is generated when absent. |
+| `correlationId` | Carried through to error events. |
+| `durable` | When `true`, the target's `flush()` is awaited after the write. |
+| `sourceId` | Commands carrying this bridge's own `sourceId` are ignored. |
+
+`normalizeCommand` resolves the collection in this order: `payload.collection`; the segment before `COMMAND` in a channel like `STORE.users.COMMAND`; the message topic (unless it is a command verb or starts with `/`); the bound collection; `'default'`. The command type falls back to the message topic (for example topic `DELETE`) and finally to `PATCH`.
+
+### Command semantics (`applyStoreCommand`)
+
+| Type | Behavior |
+|---|---|
+| `CREATE` | Insert; if the document already exists, patch it instead (upsert). |
+| `PATCH` | Patch if the document exists; otherwise insert the delta. |
+| `PATCH_PATH` | Build a nested patch with `buildNestedPathPatch(path, value)` (for example `{ settings: { theme: 'dark' } }`), then patch-or-insert. |
+| `DELETE` | Remove; a missing document or a failing remove is a silent no-op (`false`). |
+
+### Origin filtering and republishing
+
+Store CDC events are always emitted on `bridge.cdc$`. They are published to `<prefix>.ENTITY_CHANGED` only when:
+1. the event was **not** produced by a bus command (its `mutationId` is not in the ledger), and
+2. its origin is in `publishOrigins` (default `['local', 'remote']`).
+
+Published events carry the bridge `sourceId`. Events produced by a bus command are re-labeled with the command origin (by default `bus`).
+
+### Errors (`errors$`)
+
+| `kind` | Raised when |
+|---|---|
+| `command` | The command targets a collection other than the bound one, there is no store target, or the store write throws. |
+| `bus_send` | Publishing a CDC event to the bus fails. |
+| `validation` | A command cannot be normalized (for example missing `id`), a CDC item is malformed, or the CDC source errors. |
+
+## 4. Mutation Ledger (`MutationLedger`)
+
+The ledger is the bridge's deterministic echo-suppression memory. It holds:
+- `inFlight` - mutation ids currently being applied, with their origin;
+- `applied` - completed mutation ids, bounded by `capacity` (default 4096) with oldest-first eviction.
+
+```typescript
+import { MutationLedger } from '@actdim/msgmesh-store';
+
+const ledger = new MutationLedger(1024);
+ledger.begin('m-1', 'bus');
+ledger.isInFlight('m-1'); // true
+ledger.markApplied('m-1');
+ledger.end('m-1');
+ledger.wasApplied('m-1'); // true
+ledger.getInFlightOrigin('m-1'); // 'bus' (falls back to the applied origin)
+```
+
+The bridge skips a command whose `mutationId` is in flight or already applied (duplicate delivery), and treats a CDC event with such a `mutationId` as "via bus" (not republished).
+
+> `EchoTracker` (time-window based) and the `echoSuppressionMs` option are deprecated. `attachStoreBridge` does not use them.
+
+## 5. Keyed Serial Queue (`KeyedSerialQueue`)
+
+```typescript
+import { KeyedSerialQueue } from '@actdim/msgmesh-store';
+
+const queue = new KeyedSerialQueue();
+void queue.run('users:u-1', async () => save(1));
+void queue.run('users:u-1', async () => save(2)); // runs after save(1)
+void queue.run('users:u-2', async () => save(3)); // runs concurrently
+await queue.drain();
+```
+
+- Tasks with the same key run one after another in FIFO order; different keys run concurrently.
+- A rejected task does not reject later tasks for the same key.
+- `size` is the number of keys with pending work; `drain()` waits until all of them settle.
+
+Both the store bridge and the worker host use the key `<collection>:<id>`.
+
+## 6. Mutation Targets
+
+`resolveMutationTarget(store, { boundCollection })` turns a store into a `MutationTarget` (`get`, `insert`, `patch`, `remove`, optional `flush`). Recognized inputs, checked in order:
+
+1. **Collection** - has `name`, `get`, `create`, `delete` (for example a LiveStruct `LiveCollection`). Bound to its `name`; writes use `engineAccess.commitRaw` when present so the `mutationId` is preserved.
+2. **Store instance** - has `engine` with `insertDoc`, `patchDoc`, `deleteDoc`, `getDoc`.
+3. **Low-level engine** - has `insertDoc`, `patchDoc`, `deleteDoc`, `getDoc` directly.
+4. **Custom target** - already implements `get`, `insert`, `patch`, `remove`.
+
+Anything else throws `UnsupportedStoreError`. With a bound collection, operations on another collection throw.
+
+```typescript
+import { attachStoreBridge, type StoreTarget } from '@actdim/msgmesh-store';
+
+const memory = new Map<string, Record<string, unknown>>();
+const target: StoreTarget = {
+    get: async (c, id) => memory.get(`${c}:${id}`) ?? null,
+    insert: async (c, id, data) => memory.set(`${c}:${id}`, data),
+    patch: async (c, id, p) => memory.set(`${c}:${id}`, { ...memory.get(`${c}:${id}`), ...p }),
+    remove: async (c, id) => memory.delete(`${c}:${id}`),
+};
+
+// A custom target has no CDC stream, so disable CDC.
+const bridge = attachStoreBridge(bus, target, { enableCdcStream: false });
+```
+
+## 7. Worker Transport
+
+### Ports (`WorkerMessagePortLike`)
+
+Any object with `postMessage` plus one listener style (`addEventListener`, `on`, `addListener` or `onmessage`/`onerror`/`onclose` properties). `Worker`, `MessagePort`, a worker's `self` and Node `worker_threads` ports all fit; `addPortListener` / `removePortListener` pick the available style.
+
+For tests, `createMessageChannelPair()` returns two connected `InMemoryMessagePort` instances. They clone every message with `structuredClone` (`safelyClone`) and deliver it in a microtask, just like a real port.
+
+### Worker host (`attachWorkerStoreHost`)
+
+Runs next to the store (inside the worker). It answers `INIT`, `COMMAND`, `QUERY` and `BATCH` requests, applies commands through the same `applyStoreCommand` used by the bridge, serializes them per `collection:docId`, and streams CDC back only while the client is subscribed - events produced in the same microtask are coalesced into one `CDC_BATCH` message.
+
+The store may be passed directly or as a (possibly async) factory that is resolved on the first `INIT`. Stores whose engine `config` exists must have `forceMemory: true`; otherwise `WorkerHostStorageError` is thrown.
+
+### Worker client (`createWorkerStoreClient`)
+
+The main-thread facade:
+
+```typescript
+import { createMessageChannelPair, attachWorkerStoreHost, createWorkerStoreClient } from '@actdim/msgmesh-store/worker';
+
+const { port1, port2 } = createMessageChannelPair();
+const host = attachWorkerStoreHost(store, port1);
+const client = createWorkerStoreClient(port2);
+
+await client.ready();
+const sub = client.cdc$.subscribe((e) => console.log('worker CDC', e.type, e.id));
+
+await client.create('users', 'usr-1', { name: 'Alice' });
+await client.patch('users', 'usr-1', { score: 10 });
+await client.patchPath('users', 'usr-1', 'profile.bio', 'Hello');
+const rows = await client.query('SELECT * FROM docs WHERE collection = ?', ['users']);
+await client.delete('users', 'usr-1');
+
+sub.unsubscribe();
+client.dispose();
+host.dispose();
+```
+
+- **States**: `idle` -> `initializing` -> `ready`; `dead` after a close or fatal error; `disposed` after `dispose()`.
+- **`cdc$`** is refcounted: the first subscriber sends `CDC_SUBSCRIBE`, the last unsubscribe sends `CDC_UNSUBSCRIBE`.
+- **`errors$`** receives `WorkerDeadError` on close or fatal errors, unsolicited host `ERROR` messages and `messageerror` events.
+- **Batching**: `batch: 'microtask'` (or a custom scheduler function) groups requests issued in the same tick into a single `BATCH` message; each request still resolves or rejects individually.
+
+---
+
+[<- Back to 01. Overview & Advantages](./topic--01-overview-and-advantages.md) | [Next: 03. Architecture & Wiring ->](./topic--03-architecture-and-wiring.md)
+
+---
+
+## Document: docs/topic--03-architecture-and-wiring.md (Architecture & Wiring)
+
+# Architecture & Wiring
+
+[<- Back to 02. Core Concepts](./topic--02-core-concepts.md) | [Next: 04. Integration Guide ->](./topic--04-integration-guide.md)
+
+---
+
+## 1. Layers
+
+```mermaid
+flowchart TB
+    subgraph Consumers
+        UI["UI / toolbars<br/>(send commands)"]
+        SVC["Decoupled services<br/>(audit, analytics, sync)"]
+    end
+    BUS["@actdim/msgmesh bus"]
+    subgraph MS["@actdim/msgmesh-store"]
+        BR["bridge: attachStoreBridge"]
+        CDC["cdc: toStoreCdcObservable / createCdcBridge"]
+        CORE["core: normalizeCommand, applyStoreCommand,<br/>MutationLedger, KeyedSerialQueue"]
+        WK["worker: client / host / channel"]
+    end
+    STORE["@actdim/livestruct store / engine<br/>(or custom StoreTarget)"]
+
+    UI -->|STORE.COMMAND| BUS
+    BUS -->|STORE.ENTITY_CHANGED| SVC
+    BUS <--> BR
+    BR --> CORE
+    BR --> CDC
+    WK --> CORE
+    WK --> CDC
+    CORE -->|insert / patch / remove| STORE
+    STORE -->|cdc$| CDC
+```
+
+- `core` has no knowledge of the bus or of workers. It normalizes commands, resolves store targets and applies mutations.
+- `cdc` turns store streams into `StoreCdcEvent` and moves them to and from the bus.
+- `bridge` composes `core` and `cdc` into a bidirectional bus attachment with echo suppression.
+- `worker` composes `core` and `cdc` behind a `postMessage` protocol.
+
+## 2. Command Path (bus -> store)
+
+```mermaid
+sequenceDiagram
+    participant P as Producer
+    participant B as MsgMesh bus
+    participant SB as Store bridge
+    participant L as MutationLedger
+    participant Q as KeyedSerialQueue
+    participant S as Store
+
+    P->>B: send STORE.COMMAND {type, id, delta, mutationId?}
+    B->>SB: handleCommand(msg)
+    SB->>SB: normalizeCommand (collection, type, mutationId)
+    alt bound collection mismatch / no target / invalid
+        SB-->>SB: errors$ (command | validation)
+    else own sourceId or mutationId already seen
+        SB-->>SB: ignore (duplicate / own echo)
+    else accepted
+        SB->>Q: run("collection:id")
+        Q->>L: begin(mutationId, origin)
+        Q->>S: applyStoreCommand (upsert / path patch / remove)
+        Q->>L: markApplied + end
+    end
+```
+
+Key properties:
+- Commands for the same `collection:id` are applied in arrival order; other documents proceed in parallel.
+- A command with a `mutationId` that is in flight or already applied is dropped, which makes redelivery idempotent.
+- `durable: true` additionally awaits `flush()` on the target.
+
+## 3. Change Path (store -> bus)
+
+```mermaid
+sequenceDiagram
+    participant S as Store cdc$
+    participant SB as Store bridge
+    participant L as MutationLedger
+    participant C as bridge.cdc$
+    participant B as MsgMesh bus
+
+    S->>SB: raw change {type, collection, id, delta, mutationId}
+    SB->>SB: normalize, clone, deep-freeze
+    SB->>L: isInFlight / wasApplied(mutationId)?
+    alt applied from a bus command (viaBus)
+        SB->>C: emit with origin = command origin (default bus)
+        Note over SB,B: not republished - echo suppressed
+    else local or remote write
+        SB->>C: emit with origin from event (default defaultOrigin)
+        opt origin in publishOrigins
+            SB->>B: STORE.ENTITY_CHANGED (group out, topic collection, + sourceId)
+            opt secondaryChannelPerCollection
+                SB->>B: STORE.{collection}.CHANGED (topic id)
+            end
+        end
+    end
+```
+
+### Why the loop cannot form
+
+1. A bus command is recorded in the ledger before the store write.
+2. The store emits a CDC event with the same `mutationId`.
+3. The bridge sees the id in the ledger and does not publish to the bus.
+4. If another bridge forwards a published event back as a command with the original `sourceId`, the originating bridge ignores it.
+
+Because the ledger is count-bounded (not time-bounded), suppression does not depend on timing; only ids older than the last `ledgerCapacity` applied mutations are forgotten.
+
+## 4. Bus Topology
+
+| Channel | Group | Topic | Direction | Producer |
+|---|---|---|---|---|
+| `<prefix>.COMMAND` | `in` or `out` | any (often the collection, or a command verb) | -> store | application |
+| `<prefix>.<collection>.COMMAND` | `in` or `out` | any | -> store | application (bound bridges only) |
+| `<prefix>.ENTITY_CHANGED` | `out` | collection | <- store | `attachStoreBridge`, `createCdcBridge`, `publishCdcToBus` |
+| `<prefix>.<collection>.CHANGED` | `out` | entity id | <- store | same, with `secondaryChannelPerCollection` |
+
+The default prefix is `STORE`. Several bridges with different prefixes can share one bus, for example one per bounded context.
+
+## 5. Worker Topology
+
+```mermaid
+flowchart LR
+    subgraph Main["Main thread"]
+        APP["App code"]
+        WC["createWorkerStoreClient"]
+    end
+    subgraph W["Web Worker"]
+        WH["attachWorkerStoreHost"]
+        Q2["KeyedSerialQueue"]
+        ST["LiveStruct store<br/>(forceMemory: true)"]
+    end
+    APP -->|create / patch / patchPath / delete / query| WC
+    WC -->|INIT, COMMAND, QUERY, BATCH,<br/>CDC_SUBSCRIBE, CDC_UNSUBSCRIBE, CLOSE| WH
+    WH -->|INIT_OK, COMMAND_OK, QUERY_OK, BATCH_OK,<br/>CDC, CDC_BATCH, ERROR, CLOSE| WC
+    WH --> Q2 --> ST
+    ST -->|cdc$| WH
+    WC -->|cdc$| APP
+```
+
+### Handshake and requests
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant H as Host
+    participant S as Store
+
+    C->>H: INIT {id, payload: initPayload}
+    H->>S: resolve store (call factory once, retry up to factoryRetries)
+    H-->>C: INIT_OK {ready: true}  (or ERROR)
+    C->>H: CDC_SUBSCRIBE (first cdc$ subscriber)
+    C->>H: COMMAND {type, collection, docId, delta | path+value, mutationId?}
+    H->>S: applyStoreCommand (serialized per collection:docId)
+    H-->>C: COMMAND_OK {mutationId}
+    S-->>H: CDC events
+    H-->>C: CDC (one event) or CDC_BATCH (same microtask)
+    C->>H: CLOSE (client dispose)
+```
+
+Lifecycle rules enforced by the client:
+- Every request has a timeout (`requestTimeoutMs`, default 10000; `initTimeoutMs`, default 5000).
+- A `CLOSE` message or port `close` event marks the client `dead` and rejects all pending requests with `WorkerDeadError`.
+- A port `error` event is fatal under `errorPolicy: 'fatal'` (default) and only reported on `errors$` under `'log'`.
+- Requests are checked for cloneability before sending, so a non-cloneable payload rejects immediately instead of breaking the port.
+
+### Batching
+
+With `batch: 'microtask'`, requests issued in the same tick are queued and flushed once:
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant H as Host
+    C->>C: create(), patch(), query() in one tick
+    C->>H: BATCH {payload: [COMMAND, COMMAND, QUERY]}
+    H->>H: execute items (each isolated)
+    H-->>C: BATCH_OK {results: [{id, success, result | error}]}
+    C->>C: resolve / reject each original promise
+```
+
+A single queued request is sent unwrapped. `INIT` is never batched.
+
+## 6. Combining Bridge and Worker
+
+The two halves are independent. A common layout keeps the store in a worker and puts a bus on each side:
+
+- Inside the worker, `attachStoreBridge(workerBus, store)` lets worker-side services exchange commands and CDC on a local bus.
+- On the main thread, `createWorkerStoreClient(worker)` provides typed calls and `client.cdc$`; that stream can be forwarded to the main-thread bus with `publishCdcToBus(mainBus, client.cdc$)`.
+
+See [04. Integration Guide](./topic--04-integration-guide.md) for runnable setups.
+
+---
+
+[<- Back to 02. Core Concepts](./topic--02-core-concepts.md) | [Next: 04. Integration Guide ->](./topic--04-integration-guide.md)
+
+---
+
+## Document: docs/topic--04-integration-guide.md (Integration Guide)
+
+# Integration Guide
+
+[<- Back to 03. Architecture & Wiring](./topic--03-architecture-and-wiring.md) | [Next: 05. API Reference ->](./topic--05-api-reference.md)
+
+---
+
+## 1. Installation
+
+```bash
+pnpm add @actdim/msgmesh-store @actdim/msgmesh @actdim/utico rxjs
+# optional, when the target store is LiveStruct:
+pnpm add @actdim/livestruct
+```
+
+### Peer dependencies
+
+| Package | Range | Required | Used for |
+|---|---|---|---|
+| `rxjs` | `>=7.8.0` | yes | All streams (`cdc$`, `errors$`, operators). The only runtime import of this library. |
+| `@actdim/msgmesh` | `>=1.12.0` | yes | The bus passed to `attachStoreBridge`, `createCdcBridge`, `publishCdcToBus`, `subscribeCdc`. |
+| `@actdim/utico` | `>=1.12.0` | yes | Peer of `@actdim/msgmesh`. |
+| `@actdim/livestruct` | `>=1.12.0` | optional | The typical store target. Any object matching `StoreTarget` works too. |
+
+The library is ESM only (`"type": "module"`) and `sideEffects: false`. It uses `crypto.randomUUID()`, `structuredClone` and `queueMicrotask`, which are available in modern browsers, Web Workers and current Node LTS releases (global `crypto` requires Node 19 or later).
+
+## 2. Bus + Store Bridge on One Thread
+
+```typescript
+import { createMsgBus } from '@actdim/msgmesh/core';
+import { createLiveStruct } from '@actdim/livestruct';
+import { attachStoreBridge, type StoreCdcEvent } from '@actdim/msgmesh-store';
+
+const bus = createMsgBus();
+const store = await createLiveStruct({ name: 'workspace_db' });
+
+const bridge = attachStoreBridge(bus, store, {
+    channelPrefix: 'STORE',
+    publishOrigins: ['local', 'remote'], // default
+});
+
+// A decoupled service listens to published changes.
+bus.on({
+    channel: 'STORE.ENTITY_CHANGED',
+    group: 'out',
+    topic: '/.*/',
+    callback: (msg) => {
+        const event = msg.payload as StoreCdcEvent;
+        console.log('changed', event.collection, event.id, event.origin);
+    },
+});
+
+// Any module can write through the bus.
+await bus.send({
+    channel: 'STORE.COMMAND',
+    group: 'in',
+    topic: 'users',
+    payload: { type: 'PATCH', id: 'u-1', delta: { role: 'admin' }, durable: true },
+});
+
+await bridge.whenIdle();
+```
+
+Direct writes (`(await store.collection('users')).create(...)`) are published with origin `local`; the `PATCH` sent above is applied but not republished, because it came from the bus.
+
+### Binding a bridge to one collection
+
+Pass a collection as the target, or set `collection`:
+
+```typescript
+const parts = await store.collection('parts');
+const partsBridge = attachStoreBridge(bus, parts, { channelPrefix: 'PARTS' });
+
+// Listens on PARTS.COMMAND and PARTS.parts.COMMAND
+await bus.send({
+    channel: 'PARTS.parts.COMMAND',
+    group: 'in',
+    topic: 'PATCH',
+    payload: { id: 'part-101', delta: { color: 'green' } },
+});
+```
+
+Commands that resolve to a different collection are rejected with an `errors$` event of kind `command`.
+
+### Consuming CDC with filters
+
+```typescript
+import { subscribeCdc } from '@actdim/msgmesh-store/cdc';
+
+const sub = subscribeCdc(bus, {
+    channelPrefix: 'STORE',
+    collection: 'orders',
+    originFilter: ['local'],
+    typeFilter: ['insert', 'update'],
+}).subscribe((e) => audit(e));
+
+// later
+sub.unsubscribe(); // aborts the bus listener
+```
+
+### Publish-only setups
+
+When you never accept bus commands, use `createCdcBridge` (or `attachStoreBridge` with `enableCommandHandling: false`):
+
+```typescript
+import { createCdcBridge } from '@actdim/msgmesh-store/cdc';
+
+const cdcBridge = createCdcBridge(store, bus, {
+    channelPrefix: 'STORE',
+    secondaryChannelPerCollection: true,
+    onError: (err) => console.error('CDC publish failed', err),
+});
+```
+
+## 3. Store in a Web Worker
+
+### Worker side
+
+```typescript
+// store.worker.ts
+import { createLiveStruct } from '@actdim/livestruct';
+import { attachWorkerStoreHost, type WorkerMessagePortLike } from '@actdim/msgmesh-store/worker';
+
+attachWorkerStoreHost(
+    () => createLiveStruct({ name: 'workspace_db', forceMemory: true }),
+    self as unknown as WorkerMessagePortLike,
+    { factoryRetries: 1 }
+);
+```
+
+- The factory runs on the first `INIT`; concurrent `INIT`s share one promise. After `factoryRetries + 1` failed attempts the host fails permanently.
+- A store whose engine `config.forceMemory` is not `true` throws `WorkerHostStorageError` - a persistent engine must not be hosted by this transport.
+- Raw `query()` calls are forwarded to `engine.queryRaw(sql, params, options.collection)` (or `store.query(sql, params)`).
+
+### Main-thread side
+
+```typescript
+import { createWorkerStoreClient, type WorkerMessagePortLike } from '@actdim/msgmesh-store/worker';
+
+const worker = new Worker(new URL('./store.worker.ts', import.meta.url), { type: 'module' });
+const client = createWorkerStoreClient(worker as unknown as WorkerMessagePortLike, {
+    initTimeoutMs: 5000,
+    requestTimeoutMs: 10000,
+    errorPolicy: 'fatal',
+});
+
+client.errors$.subscribe((err) => console.error('worker store', err));
+client.cdc$.subscribe((e) => console.log('CDC', e.type, e.collection, e.id));
+
+await client.ready();
+await client.create('users', 'u-1', { name: 'Alice' });
+await client.patchPath('users', 'u-1', 'settings.theme', 'dark');
+```
+
+The casts are needed only because DOM typings declare `onmessage` with `MessageEvent`; the runtime objects satisfy `WorkerMessagePortLike`.
+
+### Lifecycle and recovery
+
+```typescript
+import { WorkerDeadError } from '@actdim/msgmesh-store/worker';
+
+try {
+    await client.patch('users', 'u-1', { score: 1 });
+} catch (err) {
+    if (err instanceof WorkerDeadError) {
+        const next = new Worker(new URL('./store.worker.ts', import.meta.url), { type: 'module' });
+        await client.reconnect(next as unknown as WorkerMessagePortLike);
+    }
+}
+
+// On shutdown: sends CLOSE, rejects pending calls, terminates the worker
+// (set terminateOnDispose: false to keep the port open).
+client.dispose();
+```
+
+### Forwarding worker CDC to a main-thread bus
+
+```typescript
+import { publishCdcToBus } from '@actdim/msgmesh-store/cdc';
+
+const forward = publishCdcToBus(mainBus, client.cdc$, { channelPrefix: 'STORE' });
+// forward.unsubscribe() stops forwarding and releases the CDC subscription
+```
+
+## 4. Batching Option
+
+Bursts of small requests can be sent as one `postMessage`:
+
+```typescript
+const client = createWorkerStoreClient(port, { batch: 'microtask' });
+
+await Promise.all([
+    client.create('users', 'u-1', { name: 'A' }),
+    client.create('users', 'u-2', { name: 'B' }),
+    client.query('SELECT * FROM docs WHERE collection = ?', ['users']),
+]); // one BATCH message, one BATCH_OK reply
+```
+
+| `batch` value | Behavior |
+|---|---|
+| `'none'` or omitted | Each request is posted immediately. |
+| `'microtask'` | Requests made in the same tick are flushed together in a microtask. |
+| `(flush) => void` | Custom scheduler; call `flush()` when the batch should be sent, for example `(flush) => requestAnimationFrame(flush)`. |
+
+Each item in a batch succeeds or fails independently. If the whole `BATCH` fails with an `ERROR`, every item in it is rejected.
+
+## 5. Testing Without a Browser
+
+```typescript
+import { createLiveStruct } from '@actdim/livestruct';
+import { createMessageChannelPair, attachWorkerStoreHost, createWorkerStoreClient } from '@actdim/msgmesh-store/worker';
+
+const store = await createLiveStruct({ name: 'test', forceMemory: true });
+const { port1, port2 } = createMessageChannelPair();
+const host = attachWorkerStoreHost(store, port1);
+const client = createWorkerStoreClient(port2);
+
+await client.ready();
+// ... assertions ...
+client.dispose();
+host.dispose();
+await store.close();
+```
+
+For bridge tests, `await bridge.whenIdle()` after sending commands instead of waiting on timers. A mock bus only needs `send` (returning a promise) and `on`.
+
+## 6. Checklist
+
+- Choose one `channelPrefix` per bridge and keep it consistent between producers and consumers.
+- Supply a stable `mutationId` when a command may be redelivered; the bridge then applies it once.
+- Subscribe to `errors$` on both bridges and worker clients - failures are reported there, not thrown.
+- Always `dispose()` bridges, CDC bridges, worker clients and hosts; disposal aborts bus listeners and completes streams.
+
+---
+
+[<- Back to 03. Architecture & Wiring](./topic--03-architecture-and-wiring.md) | [Next: 05. API Reference ->](./topic--05-api-reference.md)
+
+---
+
+## Document: docs/topic--05-api-reference.md (API Reference)
+
+# API Reference
+
+[<- Back to 04. Integration Guide](./topic--04-integration-guide.md) | [Back to Main README](../README.md)
+
+---
+
+All exports are available from the root entry `@actdim/msgmesh-store`. The subpath entries `./bridge`, `./cdc` and `./worker` expose the subsets listed below. The `core` module (section 4) is exported only from the root entry, except `buildNestedPathPatch`, which `./worker` re-exports.
+
+## 1. `@actdim/msgmesh-store/bridge`
+
+### `attachStoreBridge(bus, storeOrCollection, options?)`
+
+```typescript
+function attachStoreBridge(
+    bus: MsgMeshBusLike,
+    storeOrCollection: StoreTarget | null,
+    options?: StoreBridgeOptions
+): StoreBridgeController;
+```
+
+Attaches a store to a bus: listens for commands on `<prefix>.COMMAND` (and `<prefix>.<collection>.COMMAND` when bound), applies them per document in order, emits store CDC on `cdc$` and publishes non-bus changes on `<prefix>.ENTITY_CHANGED`. Throws `UnsupportedStoreError` when the store cannot be resolved. With `null` the bridge has no CDC and reports every command as an error.
+
+### `StoreBridgeOptions`
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `channelPrefix` | `string` | `'STORE'` | Prefix of all channels. |
+| `enableCdcStream` | `boolean` | `true` | Subscribe to the store CDC stream. Disable for targets without CDC. |
+| `enableCommandHandling` | `boolean` | `true` | Register bus command listeners. |
+| `defaultOrigin` | `StoreCdcOrigin` | `'local'` for CDC | Origin for CDC events without one; also the command origin fallback (else `'bus'`). |
+| `collection` | `string` | target's collection | Bind the bridge to one collection. |
+| `secondaryChannelPerCollection` | `boolean` | `false` | Also publish on `<prefix>.<collection>.CHANGED`. |
+| `publishOrigins` | `StoreCdcOrigin[]` | `['local', 'remote']` | Origins that are published to the bus. |
+| `freezeEvents` | `boolean` | `true` | Clone and deep-freeze CDC events. |
+| `ledgerCapacity` | `number` | `4096` | Capacity of the internal `MutationLedger`. |
+| `onInvalid` | `(error, rawItem) => void` | - | Called for malformed CDC items (also reported on `errors$`). |
+| `echoSuppressionMs` | `number` | - | Deprecated, ignored. |
+
+### `StoreBridgeController`
+
+| Member | Description |
+|---|---|
+| `isConnected: boolean` | `true` until disposed or the CDC source completes or errors. |
+| `isDisposed: boolean` | `true` after `dispose()`. |
+| `cdc$: Observable<StoreCdcEvent>` | All store changes, labeled with origin. Throws when the bridge has no store. |
+| `errors$: Observable<BridgeErrorEvent>` | Command, bus send and validation errors. |
+| `whenIdle(): Promise<void>` | Resolves when all queued commands have settled. |
+| `dispose(): void` | Aborts listeners, unsubscribes CDC, completes streams. Idempotent. |
+| `disconnect(): void` | Deprecated alias of `dispose()`. |
+
+### Types
+
+- **`StoreCommandType`** - `'CREATE' | 'PATCH' | 'DELETE' | 'PATCH_PATH'`.
+- **`StoreCommandPayload<T>`** - `{ type?, action? (deprecated), collection?, id, delta?, data? (deprecated), path?, value?, origin?, correlationId?, mutationId?, durable?, sourceId? }`.
+- **`BridgeErrorEvent`** - union of:
+  - `BridgeCommandErrorEvent` - `{ kind: 'command', collection?, id?, mutationId?, correlationId?, error }`
+  - `BridgeBusSendErrorEvent` - `{ kind: 'bus_send', channel?, topic?, error }`
+  - `BridgeValidationErrorEvent` - `{ kind: 'validation', error }`
+
+### `EchoTracker` (deprecated)
+
+```typescript
+class EchoTracker {
+    constructor(ttlMs?: number); // default 1000
+    record(mutationId: string, origin?: StoreCdcOrigin, extra?: { collection?: string; id?: string }): void;
+    isEcho(mutationId: string, expectedOrigin?: StoreCdcOrigin): boolean;
+    has(mutationId: string): boolean;
+    getOrigin(mutationId: string): StoreCdcOrigin | undefined;
+    prune(now?: number): void;
+    clear(): void;
+    readonly size: number;
+    dispose(): void;
+}
+```
+
+Sliding time-window tracker kept for backwards compatibility; `EchoRecord` is its record type. Use `MutationLedger` instead.
+
+## 2. `@actdim/msgmesh-store/cdc`
+
+### Types
+
+- **`StoreCdcType`** - `'insert' | 'update' | 'delete'`.
+- **`StoreCdcOrigin`** - `'local' | 'remote' | 'bus'`.
+- **`StoreCdcEvent<T>`** - `{ type, collection, id, delta, origin, timestamp, mutationId?, sourceId? }` (all readonly).
+- **`CdcSubscriptionOptions`** - `{ channelPrefix?, collection?, id?, originFilter?, typeFilter? }`.
+- **`CdcBridgeOptions`** - `{ channelPrefix?, defaultOrigin?, collection?, secondaryChannelPerCollection?, onError?, onInvalid?, freezeEvents? }`.
+- **`CdcBridge`** - `{ isDisposed, isConnected, cdc$, dispose(), disconnect() (deprecated) }`.
+- **`MsgMeshBusLike`** - `{ send(params): Promise<unknown>; on?(params: MsgMeshBusOnParams): (() => void) | void }`; a real `createMsgBus()` instance satisfies it.
+- **`MsgMeshBusOnParams`** - `{ channel, group?, topic?, callback?, handler?, ... }`.
+- **`ToStoreCdcObservableOptions`** - `{ defaultCollection?, defaultOrigin?, onInvalid?, freezeEvents? }`.
+
+### Functions
+
+| Function | Signature | Purpose |
+|---|---|---|
+| `toStoreCdcObservable` | `(source: unknown, options?: ToStoreCdcObservableOptions) => Observable<StoreCdcEvent>` | Normalize an observable, store, engine, engine access or collection into CDC events. Throws when no stream can be found. |
+| `filterCdc` | `(options?: CdcSubscriptionOptions) => MonoTypeOperatorFunction<StoreCdcEvent>` | Filter by collection, id, origins and types. |
+| `filterCollection` | `(collection: string) => MonoTypeOperatorFunction<StoreCdcEvent>` | Shorthand for `filterCdc({ collection })`. |
+| `filterEntity` | `(collection: string, id: string) => MonoTypeOperatorFunction<StoreCdcEvent>` | Shorthand for `filterCdc({ collection, id })`. |
+| `publishCdcToBus` | `(bus: MsgMeshBusLike, cdc$: Observable<StoreCdcEvent>, options?: CdcBridgeOptions) => Subscription` | Publish each event on `<prefix>.ENTITY_CHANGED` (and optionally the per-collection channel). |
+| `subscribeCdc` | `(bus: MsgMeshBusLike, options?: CdcSubscriptionOptions) => Observable<StoreCdcEvent>` | Cold observable of bus CDC events with filtering; unsubscribing aborts the listener. |
+| `createCdcBridge` | `(source: unknown, bus?: MsgMeshBusLike \| null, options?: CdcBridgeOptions) => CdcBridge` | Disposable source-to-bus publisher. |
+| `deepFreeze` | `<T>(obj: T, visited?: Set<unknown>) => T` | Recursively freeze an object in place (cycle safe). |
+| `safeClone` | `<T>(val: T) => T` | `structuredClone`, falling back to JSON, then a shallow copy. |
+| `safeSend` | `(bus, params, onError?) => Promise<unknown>` | Call `bus.send` and route any sync or async failure to `onError`; never rejects. |
+
+## 3. `@actdim/msgmesh-store/worker`
+
+### Client
+
+```typescript
+function createWorkerStoreClient(
+    portOrWorker: WorkerMessagePortLike,
+    options?: WorkerStoreClientOptions
+): WorkerStoreClient;
+```
+
+**`WorkerStoreClientOptions`** (alias `WorkerClientOptions`):
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `initTimeoutMs` | `number` | `5000` | Timeout of the `INIT` handshake. |
+| `requestTimeoutMs` | `number` | `10000` | Timeout of every other request. |
+| `autoInit` | `boolean` | `true` | Start the handshake immediately. |
+| `initPayload` | `Record<string, unknown>` | - | Sent as `INIT.payload`. |
+| `terminateOnDispose` | `boolean` | `true` | Call `terminate()` (or `close()`) on the port in `dispose()`. |
+| `errorPolicy` | `'fatal' \| 'log'` | `'fatal'` | Whether a port `error` event kills the client. |
+| `batch` | `'none' \| 'microtask' \| ((flush) => void)` | none | Request batching. |
+
+**`WorkerStoreClient`**:
+
+| Member | Description |
+|---|---|
+| `state: WorkerClientState` | `'idle' \| 'initializing' \| 'ready' \| 'dead' \| 'disposed'`. |
+| `isReady`, `isDisposed` | State shortcuts. |
+| `cdc$: Observable<StoreCdcEvent>` | Refcounted CDC stream from the host. |
+| `errors$: Observable<unknown>` | `WorkerDeadError`, unsolicited host errors, `messageerror`. |
+| `ready(): Promise<void>` | Run or await the handshake. |
+| `reconnect(port?): Promise<void>` | Reset to `idle`, optionally swap the port, resubscribe CDC and handshake again. |
+| `create(collection, id, data, options?)` | `CREATE` command; `options.mutationId` optional. |
+| `patch(collection, id, delta, options?)` | `PATCH` command. |
+| `patchPath(collection, id, path, value, options?)` | `PATCH_PATH` command. |
+| `delete(collection, id, options?)` | `DELETE` command. |
+| `query<T>(sql, params?): Promise<T[]>` | Raw SQL query in the worker. |
+| `dispose()` | Reject pending calls, send `CLOSE`, detach listeners, complete streams, terminate the port. |
+| `disconnect?()` | Deprecated alias of `dispose()`. |
+
+### Host
+
+```typescript
+function attachWorkerStoreHost(
+    storeOrFactory: StoreOrFactory,
+    portOrSelf: WorkerMessagePortLike,
+    options?: WorkerHostOptions
+): WorkerHostController;
+
+function validateStoreForWorker(store: unknown): void;
+```
+
+- **`StoreOrFactory`** - a store, or `() => store | Promise<store>`.
+- **`WorkerHostOptions`** - `{ defaultOrigin? (default 'local'), collection?, factoryRetries? (default 1) }`.
+- **`WorkerHostController`** - `{ isDisposed, store (resolved store or null), dispose() }`. `dispose()` sends `CLOSE`, stops CDC and calls the store's `close()` or `dispose()`.
+- **`validateStoreForWorker`** - throws `WorkerHostStorageError` when the store or its engine has a `config` without `forceMemory: true`.
+
+### Channel utilities
+
+| Export | Purpose |
+|---|---|
+| `safelyClone<T>(data: T): T` | `structuredClone` without fallback; throws `DataCloneError` for non-cloneable data. |
+| `addPortListener(port, type, listener)` | Register via `addEventListener`, `on`, `addListener` or `on<type>` property. |
+| `removePortListener(port, type, listener)` | Counterpart of `addPortListener`. |
+| `InMemoryMessagePort` | In-memory port with microtask delivery; extra members `isClosed`, `triggerError(error)`, `close()`, `terminate()`. |
+| `createMessageChannelPair(): { port1, port2 }` | Two connected `InMemoryMessagePort` instances. |
+| `buildNestedPathPatch` | Re-export of the core helper. |
+
+### Errors
+
+- **`WorkerDeadError`** - operation on a dead or disposed client; also used to reject pending requests.
+- **`WorkerHostStorageError`** - non in-memory store hosted in the worker.
+
+### Wire protocol types
+
+| Type | Shape |
+|---|---|
+| `WorkerRequestAction` | `'CREATE' \| 'PATCH' \| 'PATCH_PATH' \| 'DELETE'` |
+| `WorkerRequestType` | `'INIT' \| 'COMMAND' \| 'QUERY' \| 'BATCH' \| 'CDC_SUBSCRIBE' \| 'CDC_UNSUBSCRIBE' \| 'CLOSE'` |
+| `WorkerInitRequest` | `{ id, type: 'INIT', payload?: { storeName?, options?, ... } }` |
+| `WorkerCommandRequest` | `{ id, type: 'COMMAND', payload: { type?, action?, collection, docId, delta?, data?, path?, value?, mutationId? } }` |
+| `WorkerQueryRequest` | `{ id, type: 'QUERY', payload: { sql, params? } }` |
+| `WorkerBatchRequest` | `{ id, type: 'BATCH', payload: WorkerClientRequest[] }` |
+| `WorkerCdcSubscribeMessage` / `WorkerCdcUnsubscribeMessage` | `{ type: 'CDC_SUBSCRIBE' }` / `{ type: 'CDC_UNSUBSCRIBE' }` |
+| `WorkerCloseMessage` | `{ type: 'CLOSE', reason? }` (both directions) |
+| `WorkerClientRequest` | Union of all client-to-host messages. |
+| `WorkerInitResponse` | `{ id, type: 'INIT_OK', payload? }` |
+| `WorkerCommandResponse` | `{ id, type: 'COMMAND_OK', payload?: { mutationId?, ... } }` |
+| `WorkerQueryResponse` | `{ id, type: 'QUERY_OK', payload: { rows } }` |
+| `WorkerBatchResultItem` | `{ id, success, result?, error? }` |
+| `WorkerBatchResponse` | `{ id, type: 'BATCH_OK', payload: { results } }` |
+| `WorkerCdcResponse` | `{ type: 'CDC', payload: StoreCdcEvent }` |
+| `WorkerCdcBatchMessage` | `{ type: 'CDC_BATCH', payload: StoreCdcEvent[] }` |
+| `WorkerErrorResponse` | `{ id?, type: 'ERROR', error: { message, name?, stack?, code? } }` |
+| `WorkerHostMessage` | Union of all host-to-client messages. |
+| `WorkerMessageEventLike<T>` | `{ data: T }` |
+| `WorkerMessagePortLike` | `postMessage` plus optional listener methods, `onmessage`/`onerror`/`onclose`, `terminate`, `close`, `start`. |
+
+## 4. Core (root entry only)
+
+### `MutationLedger`
+
+```typescript
+class MutationLedger {
+    constructor(capacity?: number); // default 4096
+    readonly capacity: number;
+    readonly inFlight: Map<string, string>;
+    readonly applied: Map<string, number>;
+    begin(mutationId: string, origin: string): void;
+    end(mutationId: string): void;
+    isInFlight(mutationId: string): boolean;
+    getInFlightOrigin(mutationId: string): string | undefined;
+    markApplied(mutationId: string, origin?: string): void;
+    wasApplied(mutationId: string): boolean;
+    clear(): void;
+}
+```
+
+### `KeyedSerialQueue`
+
+```typescript
+class KeyedSerialQueue {
+    readonly size: number;
+    run<T>(key: string, task: () => Promise<T>): Promise<T>;
+    drain(): Promise<void>;
+}
+```
+
+### Command and target functions
+
+| Export | Signature | Purpose |
+|---|---|---|
+| `normalizeCommand` | `(msg: unknown, defaults?: NormalizeCommandDefaults) => NormalizedStoreCommand` | Parse a bus message or raw payload; throws on missing `id` or non-object input. |
+| `resolveMutationTarget` | `(store: unknown, options?: { boundCollection?: string }) => MutationTarget` | Adapt a collection, store instance, engine or custom target. |
+| `applyStoreCommand` | `(target: MutationTarget, cmd: NormalizedStoreCommand) => Promise<unknown>` | Execute upsert / path patch / delete semantics; flush when `durable`. |
+| `buildNestedPathPatch` | `(path: string, value: unknown) => Record<string, unknown>` | `'a.b.c', 1` -> `{ a: { b: { c: 1 } } }`. |
+| `UnsupportedStoreError` | `class extends Error` | Thrown by `resolveMutationTarget`. |
+
+### Types
+
+- **`NormalizedStoreCommand`** - `{ type, collection, id, delta?, path?, value?, mutationId, correlationId?, origin, durable?, sourceId?, rawPayload? }`.
+- **`NormalizeCommandDefaults`** - `{ defaultCollection?, defaultOrigin?, boundCollection? }`.
+- **`MutationTarget`** - `{ boundCollection?, get, insert, patch, remove, flush? }` with `(collection, id, ..., mutationId?, origin?)` parameters.
+- **`StoreTarget`** - `LiveStoreTarget | LiveEngineTarget | LiveCollectionTarget | CustomStoreTarget`.
+- **`LiveEngineTarget`** - `getDoc`, `insertDoc`, `patchDoc`, `deleteDoc`, optional `flush` (LiveStruct engine shape).
+- **`LiveCollectionTarget`** - `name`, `get`, `create`, `delete`, optional `flush` (LiveStruct collection shape).
+- **`LiveStoreTarget`** - `engine: LiveEngineTarget`, optional `collection(name)`, optional `flush`.
+- **`CustomStoreTarget`** - either `{ get, insert?, patch?, remove?, flush? }` with `(collection, id, ...)` methods, or `{ collection(name), flush? }`. Note: `resolveMutationTarget` (and therefore `attachStoreBridge`) only accepts the first form with all four methods present; the `collection(name)` form is resolved only inside `attachWorkerStoreHost`.
+
+---
+
+[<- Back to 04. Integration Guide](./topic--04-integration-guide.md) | [Back to Main README](../README.md)
+
+---
+
+## Document: docs/topic--along-protocol.md (Along Protocol Reference)
+
+<!-- ALONG-PROTOCOL-REFERENCE (managed by along-init - do not edit by hand) -->
+
+# Along Protocol Reference
+
+The managed block in `AGENTS.md` is the always-loaded core of the ALONG-PROTOCOL: where state lives, how work is anchored to an issue, and the list of gates. This article carries the situational procedure the core points to. Pull the section you need with `/along-kb-search` instead of reading the whole file. `along init` and `along update` regenerate this file from the installed protocol; repository-specific guidance belongs in its own `docs/topic--<slug>.md` article or in `AGENTS.md` "Project specifics".
+
+## Scope, Precedence & Subproject Placement
+
+- **Nearest Context Boundary**: Any folder may carry its own `AGENTS.md` + `.along/`; use the NEAREST ones for the area you're working in. On conflict, the more specific wins.
+- **Subproject Localization** [gate: subproject-boundary]: In submodules, nested repos or symlinked folders: all entities (issues, sessions, ADRs, history) MUST be created in the NEAREST `.along/`. Agents are STRICTLY FORBIDDEN from dumping subproject changes into the workspace root `.along/`.
+- **Multi-Subproject Work** [gate: subproject-boundary]: A change spanning subprojects needs an issue in each touched `.along/`, or a root umbrella issue whose child issues there carry `parent: <umbrella key>`. Edits under a subproject `.along/` are checked by path.
+- **Subproject Boundary**: only a nested `.git` or a user-run `along init` makes a subproject; never init a manifest folder.
+- **Precedence**: Nearest `.along/` > higher-level `.along/` > global config (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/config/GEMINI.md`).
+
+## Session Start
+
+Use the NEAREST `.along/` for the area you're working in (fall back to a higher-level one if the folder has none). These files are NOT auto-loaded; read them yourself:
+
+1. `AGENTS.md` (nearest) - conventions to follow.
+2. `.along/ISSUES.md` - active issue board (or query `/along-kb-search`).
+3. `.along/CONSTRAINTS.md` - active architectural constraints (or full log in `.along/DECISIONS.md` / `.along/DECISIONS/`).
+4. Active Issue file `.along/ISSUES/<type>--<slug>.md` for your task.
+
+Also, when relevant: `.along/VISION.md`, `.along/GLOSSARY.md`. These reflect the state WHEN WRITTEN - verify any named file/API/flag against the real code first.
+
+## Multi-Agent & Multi-Branch Concurrency
+
+- **Zero-Manual-Merge Rule** [gate: projection-protection]: On merge conflicts in derived projections (`ISSUES.md`, `INDEX.md`, `DECISIONS.md`), accept either side and run `/along-issue-sync`, `/along-kb-sync`, or `/along-decision-sync` to recompile. `along git setup` registers merge drivers that do this automatically; afterwards run `along git sync`.
+- **Append-Only Merge Driver**: `.along/HISTORY.md` and legacy monolithic `.along/DECISIONS.md` are append-only. Configure `.gitattributes` with `merge=union`. Modular ADR files in `.along/DECISIONS/` are isolated per-file to eliminate merge collisions.
+- **Untracked Exports** [gate: untracked-exports]: `.along/dashboard.html`, `.along/DASHBOARD.md` and per-machine `.along/diagnostics/` stay out of Git.
+- **Context Isolation**: Context is localized to the target issue file, session-scoped blackboard (`.along/.session/<slug>/`), and completed session logs.
+- **Parallel Closeout**: `along session list`; on the user's yes `along plan approve --closeout --ready`, then `along session close --ready`.
+
+## Issue Anchoring & Commits
+
+- **No Code Without Issue** [gate: require-active-issue]: Before modifying source code, agents MUST identify or create an issue in `.along/ISSUES/<type>--<slug>.md` and set `status: in-progress`.
+- **Session Binding & Plan Approval** [gate: require-plan-approval]: `along start <slug>` binds THIS agent session to the issue; parallel sessions keep their own bindings. Source edits unlock after the user approves the plan (`EnterPlanMode` -> `ExitPlanMode`; outside plan mode, write the plan to a file and run `along plan approve --plan-file <path>` after the user's explicit yes). `along plan status` shows the binding.
+- **Exemptions**: Read-only Q&A and 1-line micro-edits (typo fixes, comments) do not require issues.
+- **Inquiry Read-Only Invariance (Zero-Mutation Rule on Questions)** [gate: require-plan-approval]: On interrogative prompts ("is X done?", "why did Y fail?"), write/modify tools are STRICTLY PROHIBITED. Return a read-only audit report and ask for confirmation before modifying anything.
+- **Commit Binding** [gate: commit-issue-binding]: Every commit via `/along-commit` MUST bind to the active issue slug.
+- **No AI Co-Authors**: Commit messages MUST NOT carry `Co-Authored-By:` trailers naming an AI agent (GitHub lists the vendor as a contributor). `along hook install` turns runtime attribution off; opt out via `.along/config.json` `commits.allow_ai_coauthor: true`.
+
+## Issue Plans & Approving Ahead
+
+- **Plan location**: An issue's plan lives next to its ticket in `.along/ISSUES/<key>/plan.md` (committed; moves with the ticket to `done/` and on rename). It is one living file: the approved baseline, then each correction appended as `## Revision N (date, source)` with a `Reason:` line. `along-team` writes its Living Plan there too; blackboards without an issue keep `.along/.session/<slug>/plan.md`.
+- **Plan status** (ticket front-matter `plan_status`, shown on the board): `needs-approval` (written, waiting for the user), `approved` (ready to run), `needs-rework` (cannot be followed within the ticket). Agents may set `needs-approval` / `needs-rework`; only `along plan approve`, after the user's explicit yes, sets `approved` [gate: require-plan-approval]: a file-tool edit that sets it is denied, a shell write is reported at Stop.
+- **Approve ahead**: Write the plan (plan mode, or a file), show it, and after the user's yes run `along plan approve <slug>` (`--plan-file <path>` outside plan mode) before `along start`. The issue is not started; the ticket says `plan_status: approved` and the CLI logs the approval in `.along/.session/plan-approvals.jsonl` (machine-local, closed to file tools). A later `along start <slug>`, by the user, the agent, or the orchestrator / runner daemon, runs the plan with no second approval and no re-planning (the orchestrator skips its architect).
+- **Approved elsewhere**: `approved` in the ticket with no approval logged on this machine (approved on another machine, or written by hand) is not trusted: show the plan and ask once in the current channel (chat, or the daemon's Telegram reply); the orchestrator stops with `needs-input`.
+- **Plans change during work; escalate only past the ticket**: Once approved, the plan belongs to the agents. A deviation they can resolve while still meeting the ticket's requirements and acceptance criteria is resolved on the spot and recorded (`along plan revise <slug> --plan-file <path> --reason "..."`); no one is asked and the status stays `approved`. Only a problem the ticket cannot absorb (a requirement cannot be met or must change, a decision only the user can make) goes to the user: `along plan rework <slug> --reason "..."`, stop, ask. In `along-team`, implementer and reviewer report plan problems to the supervisor, the architect revises, and only a ticket-level problem halts the run. Plans are not checked for staleness: a plan stays valid until the work shows otherwise.
+
+## Entity Ecosystem
+
+- **Entity types**: Issues (`feat`, `bug`, `debt`, `task`, `docs`, `spike`), Decisions (ADRs), Milestones, Sessions. A risk or blocker is an issue tagged `risk`; a spike is a `spike--<slug>` issue with an `## Outcome` section. Full YAML schemas: `docs/topic--domain-model.md`.
+- **Canonical keys**: `<type>--<slug>` (e.g. `feat--token-refresh`). Reference by key, NEVER by file path.
+- **ADRs**: Modular records in `.along/DECISIONS/ADR-YYYY-MM-DD--<slug>.md` (with legacy fallback to monolithic `DECISIONS.md`). Never edit past entries - mark superseded. Recompile projections (`.along/DECISIONS.md` board and `.along/CONSTRAINTS.md`) via `/along-decision-sync` or `along decision sync`. Create new ADRs via `/along-decision-sync` or `along decision create <slug> --title "..."`. Add terms to `.along/GLOSSARY.md`.
+- **Issue lifecycle** [gate: issue-lifecycle]: Complete active issues via `along wrap <slug>` (or `along issue done <slug> --status cancelled|superseded`). Closing as done requires `validate_issue_completion` (no scaffold placeholders, mandatory Acceptance Criteria, all `- [x]` closed).
+- **Entity references** [gate: entity-reference-integrity] [gate: entity-deletion-protection]: Never delete an entity other entities reference; use `along issue rename` / `along issue supersede`.
+- **Auto-entity creation**: Agents MUST automatically detect user intent (build/fix/refactor -> Issue, blocked/rate-limit -> Issue tagged `risk`, compare/benchmark -> `spike` Issue, release/sprint -> Milestone) and create entities without prompting the user.
+
+## Knowledge Base & Documentation
+
+- **Stable Entry Point**: `README.md` and `docs/` never link into `.along/`; route through `docs/INDEX.md` or `docs/topic--<slug>.md`.
+- **Portable Links**: Relative Markdown links only.
+- **Fact Grounding**: Agents MUST extract facts from actual code, `README.md`, `docs/`, and `package.json`. Generic LLM placeholders are strictly prohibited.
+- **Fast Retrieval**: Agents SHOULD query `/along-kb-search` before reading whole documentation files.
+- **Doc Blast Radius**: After non-trivial code changes, agents MUST map affected symbols to `docs/topic--*.md` articles and update them before completing the task.
+- **Manual Document Lock** [gate: doc-manual-lock]: Documents marked with `write_policy: manual` (or `locked: true`) are protected from automated agent modification during blast radius sweeps. Modifications require an explicit documentation issue (`docs--<slug>`).
+- **Managed Rule Packs** [gate: rule-pack-protection]: Never edit `.along/rules/**/*.md`; `along rules attach` owns them. Project guidelines go to `docs/topic--<slug>.md` or "Project specifics"; revert with `along rules restore`. `.along/rules/gates.yaml` and `.along/scripts/` stay repo-owned.
+
+### Documentation Routing Tree
+
+[gate: doc-routing-compliance]
+
+- Architectural choice / trade-off -> `.along/DECISIONS/` (ADR)
+- Public overview / pitch / landing page -> `README.md`
+- Technical interface contract / CLI spec -> `docs/topic--<slug>.md` (`type: reference`)
+- Conceptual explanation / comparison / philosophy -> `docs/topic--<slug>.md` (`type: explanation`, `write_policy: manual`)
+- Procedural walkthrough / runbook -> `docs/topic--<slug>.md` (`type: guide`)
+
+## While Working
+
+- **Token hygiene**: Use quiet flags (`pytest -q`, `dotnet test -v q`), filter outputs, inspect targeted line ranges.
+- **Lifecycle hooks first**: Agents MUST use `/along-test`, `/along-build`, `/along-dev` (or `.along/scripts/*.py`) before raw shell commands.
+- **Post-change review**: Agents MUST inspect diffs and evaluate blast radius via `along graph-impact` (or static search fallback). Silent skips are forbidden.
+
+## Stage & Session Completion Checklist
+
+When a stage or session completes, agents MUST execute in this order:
+1. [ ] **Tests** [gate: test_before_stop]: Run via `/along-test` with quiet flags. Zero failures.
+2. [ ] **File Integrity**: `git status -u` - all new/modified files non-zero size, no empty placeholders.
+3. [ ] **Code Review**: Inspect diff for side effects, verify REQ-N coverage, evaluate blast radius via `along graph-impact` (or static search), verify architectural decision compliance.
+4. [ ] **Entity Reconciliation**: Close issues (`done` + move to `done/`), update milestones, record the `## Outcome` of a spike. [gate: unresolved_gate_denial]: every tool call a gate denied is redone within the gate's rules or disclosed (`along gates denials`, `along gates ack <id> --note "..."`); `along wrap` / `along issue done` refuse until the user has replied to a disclosure (`--force-reason` after their reply).
+5. [ ] **Doc Blast Radius**: Update affected `docs/topic--*.md`, `README.md` and Project specifics; add new terms to `.along/GLOSSARY.md` (create it on first use); touch `.along/VISION.md` only if scope/roadmap changed; run `/along-kb-sync`.
+6. [ ] **Session Log & Wrap** [gate: wrap_before_stop]: `along wrap <slug> --summary "<summary>" (--decisions <ADR...> | --no-decisions)` writes `.along/SESSIONS/<YYYY>/<date>--<slug>.md` (summary, decisions, attributed `files:`, blackboard record), compiles projections, and appends to `.along/HISTORY.md` (provide `--summary` or let it fallback to issue title).
+7. [ ] **Projections** [gate: projection_sync_before_stop]: Run `/along-issue-sync` and `/along-decision-sync`.
+8. [ ] **HISTORY**: Verify line in `.along/HISTORY.md` (appended automatically by `along wrap`; update via `along history append <slug> "..."` if needed).
+9. [ ] **Compaction**: Advise user to run `/compact`.
+
+## Multi-Agent Routing
+
+- **Mandatory Adaptive Complexity Escalation & Execution Mode Routing**: When scope touches > 3 files, crosses subsystems, or refactors core engines: single-agent execution is forbidden - route to `along-team`. Plans MUST declare `Execution Mode: Direct` or `Role-Based`. Role-based blackboards (`along scratch init`) are held to the step loop [gate: team-step-active] [gate: team-reviews-before-stop]; dropping it needs `along scratch fallback <slug> --reason "..."`.
+
+## Tool-Use Rules
+
+- **Contract-First Lifecycle**:
+  - Agents MUST execute `.along/scripts/<action>.py` or `/along-test`, `/along-build`, `/along-dev` before raw shell commands.
+  - When `.along/scripts/` is missing, `along test`/`along build` auto-detects and synthesizes hooks.
+  - In submodules, execute the hook from that subproject's own `.along/scripts/`.
+- **Environment Isolation**:
+  - Agents MUST NOT install system-wide or global packages when a script fails. Fix the architecture (missing `bootstrap.ensure_deps()`, incorrect `uv` wrapper), not the environment.
+- **Workspace Containment** [gate: workspace-containment]: Read and write only inside the workspace. Writes elsewhere are limited to the temp dir and runtime artifact dirs. Other repos need `allowed_roots` (`.along/rules/gates.yaml`, issue frontmatter, `along start --allow-root`). Never touch credential stores (`~/.ssh`, `~/.aws`).
+- **Runtimes Without Along Hooks** (Claude Cowork, Cursor, OpenCode, plain shells): gates are advisory there. Agents MUST self-apply every gate-tagged rule and use the `along` CLI for tests, commits, entity changes, and wrap instead of raw tools. `along doctor` reports the enforcement level.
+- **File Modification & Anti-Deletion**:
+  - Never delete, truncate, or overwrite existing documentation, comments, or code unless explicitly instructed.
+  - After batch edits or migrations, agents MUST run `git diff --stat` and inspect unexpected size reductions.
+  - No stubs or skeletons in place of populated code.
+  - Anchor edits on minimal unique chunks. Restore unintended deletions immediately.
+- **Clean ASCII**: ASCII punctuation only (no typographic dashes, quotes, ellipsis, bullets, NBSP/zero-width chars or BOM); `along sanitize --write` fixes them.
+- **Markdown**: Every code fence names a language.
+- **Commit-time checks**: typography, code fences, links, filenames, secrets, stubs and AI co-authors are checked by `along lint` (pre-commit and CI), not while you work.
+- **Bypass Is The User's Call**: `-n`, `--force-reason`, `scratch fallback` need `--reason` and the user's reply after the failure; each bypass is recorded (`along gates stats`).
+- **File Content Via Tools Only** [gate: cli_safety]: Create/edit files with the agent's file tools. NEVER carry content in heredocs, `python -c`, or inline shell. Write scripts to a file first.
+- **No Ad-Hoc Shell Code Probing**: Agents must never use `python -c` or inline shell commands to probe internal module symbols or inspect functions. Internal engine packages (`alongkit`, `scripts`) are not installed into the global Python environment, and ad-hoc shell probing produces confusing error traces instead of actionable information. Prescribed inspection tools: static file tools (`view_file`, `grep_search`), AST tools (`along graph-*`), official CLI subcommands (`along <command> --help`), or dedicated hermetic tests in `tests/`.
+- **CLI Black-Box Invariance**: Agents MUST treat the Along CLI and development tools as strict opaque black-box executables. Reading Along engine source code (`.along/bin/*.py`, `~/.along/bin/`, `alongkit/**`, `along_*.py`) to inspect internals, arguments, or data structures is STRICTLY FORBIDDEN unless working on the Along repository itself. Always use `along <command> --help` or official documentation in `docs/`. If an Along command returns an error or fails validation, report the exact CLI error output to the user immediately. Do not attempt to reverse-engineer or debug the Along engine.
+- **Verify Written Files**: After writing/patching, confirm parsing (`python -m compileall -q`, `bash -n`, etc.) before moving on.
+- **Hermetic Tests**: Tests MUST target throwaway fixtures (`tempfile.mkdtemp()`), never the live repository. Read-only access to live state is allowed. Keep a meta-test that verifies `git status --porcelain -u` stays clean.
+- Windows-safe filenames: dates `YYYY-MM-DD`, date first.
+- Keep `ISSUES.md` compact: `along context-budget --check` enforces the limit.
+- Never write secrets into tracked files.
+
 ---
 
 ## Document: docs/topic--architecture.md (System Architecture & Flow)
 
-# System Architecture & Flow
+# @actdim/msgmesh-store Architecture
 
-Core technical specification and documentation for msgmesh-store.
+## 1. System Overview
 
-## Overview
-Document system components and engineering guidelines here.
+`@actdim/msgmesh-store` connects a typed message bus (`@actdim/msgmesh`) with a document store (`@actdim/livestruct` or any structurally compatible target). It moves mutation commands from the bus into the store, moves store changes (CDC) back onto the bus without echo loops, and carries the same protocol across a Web Worker boundary.
+
+```text
++-------------------------------------------------------------------------------------+
+|                               @actdim/msgmesh-store                                 |
++-------------------------------------------------------------------------------------+
+|  bridge/   attachStoreBridge(bus, store, options) -> StoreBridgeController          |
+|            - command listeners on <prefix>.COMMAND and <prefix>.<collection>.COMMAND |
+|            - CDC publish on <prefix>.ENTITY_CHANGED (+ <prefix>.<collection>.CHANGED)|
+|            - origin filtering (publishOrigins), sourceId self-filter, errors$        |
++-------------------------------------------------------------------------------------+
+|  cdc/      toStoreCdcObservable, filterCdc, publishCdcToBus, subscribeCdc,          |
+|            createCdcBridge, deepFreeze, safeClone, safeSend                          |
++-------------------------------------------------------------------------------------+
+|  worker/   createWorkerStoreClient  <-- postMessage -->  attachWorkerStoreHost       |
+|            INIT / COMMAND / QUERY / BATCH / CDC / CDC_BATCH / ERROR / CLOSE          |
+|            createMessageChannelPair, InMemoryMessagePort, safelyClone               |
++-------------------------------------------------------------------------------------+
+|  core/     normalizeCommand, resolveMutationTarget, applyStoreCommand,              |
+|            MutationLedger (echo suppression), KeyedSerialQueue (per-doc ordering)   |
++-------------------------------------------------------------------------------------+
+|  Runtime dependency: rxjs only. Bus, store and port are structural interfaces.      |
++-------------------------------------------------------------------------------------+
+```
+
+## 2. Core Architectural Principles
+
+### 2.1. Structural boundaries
+The library never imports `@actdim/msgmesh` or `@actdim/livestruct` at runtime. It accepts `MsgMeshBusLike`, `StoreTarget` and `WorkerMessagePortLike`, so real buses, real stores and plain test doubles are interchangeable.
+
+### 2.2. One mutation pipeline
+The store bridge and the worker host both run commands through `normalizeCommand` (bridge) or the host's command mapper, then `KeyedSerialQueue` keyed by `collection:id`, then `applyStoreCommand`. `CREATE` and `PATCH` are upserts, `PATCH_PATH` writes a nested path, `DELETE` of a missing document is a no-op.
+
+### 2.3. Deterministic echo suppression
+`MutationLedger` records every bus-applied `mutationId` (in flight and applied, count-bounded). CDC events carrying such an id are emitted locally but never republished, and duplicate commands are skipped. The time-window `EchoTracker` is deprecated.
+
+### 2.4. Immutable, fault-tolerant streams
+CDC events are cloned and deep-frozen by default, malformed items are dropped through `onInvalid`, bus send failures go to `errors$`, and disposal is idempotent everywhere.
+
+### 2.5. Explicit worker lifecycle
+The client is a state machine (`idle`, `initializing`, `ready`, `dead`, `disposed`) with request timeouts, `WorkerDeadError` on close, optional microtask batching and refcounted CDC subscription. The host resolves lazy store factories once, rejects non in-memory stores and coalesces CDC per microtask.
+
+Data flow diagrams for each path are in [03. Architecture & Wiring](./topic--03-architecture-and-wiring.md).
+
+## 3. Cross-Links
+
+- [Knowledge Base Index](./INDEX.md) - Knowledge Base Root
+- [Overview & Advantages](./topic--01-overview-and-advantages.md) - What the library solves
+- [Core Concepts](./topic--02-core-concepts.md) - Bridge, CDC, ledger, queue, targets, worker
+- [Architecture & Wiring](./topic--03-architecture-and-wiring.md) - Data flow and mermaid diagrams
+- [Integration Guide](./topic--04-integration-guide.md) - Installation and wiring recipes
+- [API Reference](./topic--05-api-reference.md) - Every public export
+- [Domain Model](./topic--domain-model.md) - Key types and entities
+- [Setup & Workflow](./topic--setup-and-workflow.md) - Scripts and monorepo development
+- [License](./topic--license.md) - License Information
 
 ---
 
-## Document: docs/topic--domain-model.md (Domain Model & Entity Ecosystem)
+## Document: docs/topic--domain-model.md (Domain Model & Type Contracts)
 
-# Domain Model & Entity Ecosystem
+# @actdim/msgmesh-store Domain Model & Type Contracts
 
-Core technical specification and documentation for msgmesh-store.
+## 1. Domain Types Overview
 
-## Overview
-Document system components and engineering guidelines here.
+The domain of `@actdim/msgmesh-store` has four groups of entities: **change events** flowing out of the store, **commands** flowing into it, **targets** that adapt concrete stores, and the **worker wire protocol**. Bookkeeping entities (`MutationLedger`, `KeyedSerialQueue`) tie them together. Full signatures are in the [API Reference](./topic--05-api-reference.md).
+
+## 2. Change Events
+
+### 2.1. `StoreCdcEvent<T>`
+```typescript
+interface StoreCdcEvent<T = Record<string, unknown>> {
+    readonly type: StoreCdcType; // 'insert' | 'update' | 'delete'
+    readonly collection: string;
+    readonly id: string;
+    readonly delta: Partial<T>;
+    readonly origin: StoreCdcOrigin; // 'local' | 'remote' | 'bus'
+    readonly timestamp: number;
+    readonly mutationId?: string;
+    readonly sourceId?: string;
+}
+```
+
+- Identity: `collection` + `id` identify the document; `mutationId` identifies the write.
+- `origin` drives publishing (`publishOrigins`) and filtering (`originFilter`).
+- `sourceId` is the publishing bridge's random id; a bridge ignores commands that carry its own `sourceId`.
+- Events are deep-frozen unless `freezeEvents: false`.
+
+### 2.2. Filters
+`CdcSubscriptionOptions` = `{ channelPrefix?, collection?, id?, originFilter?, typeFilter? }`, used by `subscribeCdc` and `filterCdc`.
+
+## 3. Commands
+
+### 3.1. `StoreCommandPayload<T>` (wire form on the bus)
+```typescript
+interface StoreCommandPayload<T = Record<string, unknown>> {
+    readonly type?: StoreCommandType; // 'CREATE' | 'PATCH' | 'DELETE' | 'PATCH_PATH'
+    readonly collection?: string;
+    readonly id: string;
+    readonly delta?: Partial<T> | Record<string, unknown>;
+    readonly path?: string;
+    readonly value?: unknown;
+    readonly origin?: StoreCdcOrigin;
+    readonly correlationId?: string;
+    readonly mutationId?: string;
+    readonly durable?: boolean;
+    readonly sourceId?: string;
+    // deprecated: action (use type), data (use delta)
+}
+```
+
+### 3.2. `NormalizedStoreCommand` (internal form)
+Produced by `normalizeCommand`: `type`, `collection` and `mutationId` are always set (a random UUID is generated when absent), `origin` defaults to `'bus'`, `rawPayload` keeps the original payload.
+
+### 3.3. Command lifecycle
+```mermaid
+stateDiagram-v2
+    [*] --> Received: bus message
+    Received --> Rejected: invalid / wrong collection / no target
+    Received --> Skipped: own sourceId or mutationId seen
+    Received --> Queued: KeyedSerialQueue(collection:id)
+    Queued --> InFlight: ledger.begin
+    InFlight --> Applied: applyStoreCommand ok
+    InFlight --> Failed: store error (errors$ kind command)
+    Applied --> [*]: ledger.markApplied + end
+    Failed --> [*]: ledger.markApplied + end
+    Rejected --> [*]
+    Skipped --> [*]
+```
+
+## 4. Targets
+
+| Type | Shape | Typical source |
+|---|---|---|
+| `LiveStoreTarget` | `{ engine: LiveEngineTarget, collection?(name), flush? }` | `createLiveStruct(...)` |
+| `LiveEngineTarget` | `{ getDoc, insertDoc, patchDoc, deleteDoc, flush? }` | `createLiveEngine(...)` |
+| `LiveCollectionTarget` | `{ name, get, create, delete, flush? }` | `store.collection('users')` |
+| `CustomStoreTarget` | `{ get, insert?, patch?, remove?, flush? }` or `{ collection(name), flush? }` | tests, adapters |
+| `StoreTarget` | union of the above | `attachStoreBridge` input |
+| `MutationTarget` | `{ boundCollection?, get, insert, patch, remove, flush? }` | output of `resolveMutationTarget` |
+
+## 5. Bookkeeping
+
+- **`MutationLedger`** - `inFlight: Map<mutationId, origin>`, `applied: Map<mutationId, timestamp>` bounded by `capacity` (default 4096).
+- **`KeyedSerialQueue`** - one promise tail per key; same key FIFO, different keys concurrent.
+- **`BridgeErrorEvent`** - `command` | `bus_send` | `validation`.
+
+## 6. Worker Protocol
+
+| Direction | Messages |
+|---|---|
+| Client -> host | `INIT`, `COMMAND`, `QUERY`, `BATCH`, `CDC_SUBSCRIBE`, `CDC_UNSUBSCRIBE`, `CLOSE` |
+| Host -> client | `INIT_OK`, `COMMAND_OK`, `QUERY_OK`, `BATCH_OK`, `CDC`, `CDC_BATCH`, `ERROR`, `CLOSE` |
+
+Requests carry an `id` that the response echoes; `CDC`, `CDC_BATCH` and `CLOSE` are unsolicited. Commands identify documents with `docId` (not `id`, which is the request id).
+
+### Client state machine
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> initializing: ready() / autoInit
+    initializing --> ready: INIT_OK
+    initializing --> idle: INIT error or timeout
+    ready --> dead: CLOSE / port close / fatal error
+    initializing --> dead: CLOSE / port close / fatal error
+    dead --> idle: reconnect()
+    idle --> disposed: dispose()
+    ready --> disposed: dispose()
+    dead --> disposed: dispose()
+    disposed --> [*]
+```
+
+## 7. Cross-Links
+
+- [Knowledge Base Index](./INDEX.md)
+- [System Architecture](./topic--architecture.md)
+- [Core Concepts](./topic--02-core-concepts.md)
+- [API Reference](./topic--05-api-reference.md)
 
 ---
 
-## Document: docs/topic--setup-and-workflow.md (Setup, Installation & Agent Workflows)
+## Document: docs/topic--license.md (License)
 
-# Setup, Installation & Agent Workflows
+# License
 
-Core technical specification and documentation for msgmesh-store.
+`@actdim/msgmesh-store` is distributed under the **MIT License**.
 
-## Overview
-Document system components and engineering guidelines here.
+- Repository file: [LICENSE](https://github.com/actdim/msgmesh-store/blob/main/LICENSE)
+
+## Summary of Terms
+
+- **Use, modification, distribution**: free for any purpose, including commercial use, modification, redistribution, sublicensing and sale.
+- **Condition**: the copyright notice and the permission notice must be included in all copies or substantial portions of the software.
+- **Warranty**: the software is provided "as is", without warranty of any kind.
+
+---
+
+## Full License Text
+
+```text
+MIT License
+
+Copyright (c) 2026 Pavel Borodaev
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## Document: docs/topic--setup-and-workflow.md (Setup, Build & Workflow)
+
+# @actdim/msgmesh-store Setup, Build & Workflow
+
+## 1. Prerequisites & Installation
+
+- **Node.js**: a release with global `crypto`, `structuredClone` and `queueMicrotask` (Node 19 or later; current LTS recommended).
+- **Package manager**: `pnpm`.
+- **TypeScript**: `^5.9.3` (dev dependency).
+
+Install as a consumer:
+
+```bash
+pnpm add @actdim/msgmesh-store @actdim/msgmesh @actdim/utico rxjs
+pnpm add @actdim/livestruct # optional peer
+```
+
+## 2. Scripts
+
+| Command | Action | Description |
+|---|---|---|
+| `pnpm run test` | `npx vitest --config=vitest.node.config.ts --no-cache` | Runs the Node test suite in `tests/` once. |
+| `pnpm run test:w` | `npx vitest --config=vitest.node.config.ts --watch` | Runs the test suite in watch mode. |
+| `pnpm run build` | `tsc -b tsconfig.json && vite build` | Typechecks, then builds ESM bundles and `.d.ts` files into `dist/` for the `.`, `./cdc`, `./bridge`, `./worker` entries. |
+| `pnpm run typecheck` | `tsc -b tsconfig.json` | Type checks without bundling. |
+| `pnpm run format` | `prettier --write .` | Formats the package. |
+| `pnpm run format:check` | `prettier --check .` | Verifies formatting. |
+| `pnpm run docs:dev` | `vitepress dev docs` | Serves the documentation site locally. |
+| `pnpm run docs:build` | `vitepress build docs` | Builds the documentation site. |
+| `pnpm run docs:preview` | `vitepress preview docs` | Previews the built site. |
+
+## 3. Test Suite (`tests/`)
+
+The tests run in Node against in-memory LiveStruct stores (`forceMemory: true`) and in-memory ports, so they need no browser:
+
+| File | Covers |
+|---|---|
+| `bridge.test.ts` | Command translation, origin labeling, echo suppression, ordering, errors, disposal. |
+| `cdc.test.ts` | `toStoreCdcObservable`, filters, `publishCdcToBus`, `subscribeCdc`, `createCdcBridge`, secondary channels. |
+| `worker.test.ts` | Handshake, lazy factories, commands, queries, CDC streaming, timeouts, close and reconnect, batching. |
+| `ledger.test.ts` | `MutationLedger` semantics and capacity eviction. |
+| `keyedQueue.test.ts` | `KeyedSerialQueue` ordering, isolation and `drain()`. |
+| `applyMutation.test.ts` | `normalizeCommand`, `resolveMutationTarget`, `applyStoreCommand`. |
+| `types.test.ts` | Compile-time constraints of the public API. |
+
+Tests are hermetic: they await `whenIdle()`, CDC promises or microtasks rather than fixed timers.
+
+## 4. Development Inside the Mempart Monorepo
+
+- The package lives at `src/packages/msgmesh-store` and is a Git submodule of the mempart repository (`https://github.com/actdim/msgmesh-store.git`).
+- It is a member of the pnpm workspace (`src/pnpm-workspace.yaml` includes `packages/*`). With `link-workspace-packages=true` in `src/.npmrc`, the dev dependencies `@actdim/livestruct`, `@actdim/msgmesh` and `@actdim/utico` resolve to the sibling packages in `src/packages/`, so changes there are picked up without publishing.
+- Run package scripts from the package folder, or from `src/` with a filter, for example `pnpm --filter @actdim/msgmesh-store test`.
+- Versions are synchronized monorepo-wide; do not bump this package's version on its own (the root `pnpm run version:sync <version>` script updates every package together).
+- When `@actdim/livestruct` changes its engine or collection shape, run this package's `typecheck` and `test` to confirm the structural targets still match.
+
+## 5. Cross-Links
+
+- [Knowledge Base Index](./INDEX.md) - Knowledge Base Root
+- [System Architecture](./topic--architecture.md) - Architecture
+- [Domain Model](./topic--domain-model.md) - Domain Model
+- [Integration Guide](./topic--04-integration-guide.md) - Integration Guide
+- [API Reference](./topic--05-api-reference.md) - API Reference
+- [License](./topic--license.md) - License Information

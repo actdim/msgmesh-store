@@ -7,7 +7,6 @@ agent: antigravity
 branch: main
 commit: efe8107
 summary: 'feat(msgmesh-store): implement store bridge and echo suppression engine'
-milestone: v2.0.0-along-transition
 issues_advanced: []
 issues_completed: [task--store-bridge-and-echo-suppression]
 decisions: []

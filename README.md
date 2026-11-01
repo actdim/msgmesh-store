@@ -23,9 +23,9 @@ If LiveStore already synchronizes state across browser tabs via SQLite and `Broa
 2. **Change Data Capture (CDC) for Decoupled Services:**
    Decoupled modules (audit logs, analytics, minimaps, cloud sync watermarks) need to react when database records change, without holding direct class instances or query subscriptions to the underlying documents.
 3. **Command Bus (CQRS Pipeline):**
-   UI toolbars emit domain intents (`cad.command.extrude_face`) rather than mutating database tables directly. The command bus validates topological constraints before committing to storage.
+   UI toolbars emit domain intents (`cad.command.extrude_face`) rather than mutating database tables directly. The store bridge normalizes and validates command payloads (`STORE.COMMAND`) and serializes them per document before committing to storage; domain-level validation stays in your own bus handlers.
 4. **Echo Suppression (Feedback Loop Protection):**
-   When a document change emits a bus event and a bus listener triggers a patch, an infinite loop can easily form. The bridge includes built-in origin tracking (`local`, `remote`, `bus`) and debounce guards.
+   When a document change emits a bus event and a bus listener triggers a patch, an infinite loop can easily form. The bridge includes built-in origin tracking (`local`, `remote`, `bus`) and a deterministic, count-bounded mutation ledger: changes applied from bus commands are never republished to the bus.
 
 ---
 
@@ -43,7 +43,7 @@ If LiveStore already synchronizes state across browser tabs via SQLite and `Broa
 ## 3. Quick Code Example
 
 ```typescript
-import { createMsgBus } from '@actdim/msgmesh';
+import { createMsgBus } from '@actdim/msgmesh/core';
 import { attachStoreBridge } from '@actdim/msgmesh-store';
 import { createLiveStruct } from '@actdim/livestruct';
 
@@ -65,9 +65,12 @@ bridge.cdc$.subscribe((event) => {
 });
 
 // 4. Remote or worker dispatches command over bus
-bus.send({
-    channel: 'PARTS.PATCH',
-    payload: { id: 'part-101', delta: { color: 'green' } },
+//    (the bridge listens on PARTS.COMMAND and PARTS.parts.COMMAND)
+await bus.send({
+    channel: 'PARTS.COMMAND',
+    group: 'in',
+    topic: 'parts',
+    payload: { type: 'PATCH', id: 'part-101', delta: { color: 'green' } },
 });
 ```
 
@@ -75,7 +78,7 @@ bus.send({
 
 ## 4. Architecture Overview
 
-```
+```text
   [ Local Forms / Dynstruct UI ]         [ Decoupled Services / Minimap / Cloud ]
                 |                                          |
         Direct MobX Access                         Listen to Bus Channels
@@ -103,3 +106,23 @@ bus.send({
 ```bash
 pnpm add @actdim/msgmesh-store @actdim/msgmesh @actdim/livestruct @actdim/utico rxjs
 ```
+
+`@actdim/livestruct` is an optional peer: any object matching the `StoreTarget` interface can be used instead.
+
+---
+
+## 6. Documentation
+
+Full documentation site: [https://actdim.github.io/msgmesh-store/](https://actdim.github.io/msgmesh-store/)
+
+| Section | Description |
+|---|---|
+| [**01. Overview & Key Advantages**](./docs/topic--01-overview-and-advantages.md) | What the library solves, when to use it, entry points. |
+| [**02. Core Concepts**](./docs/topic--02-core-concepts.md) | CDC events, CDC bridge, store bridge, mutation ledger, keyed queue, targets, worker transport. |
+| [**03. Architecture & Wiring**](./docs/topic--03-architecture-and-wiring.md) | Command and change data flow, echo suppression, bus topology, worker protocol diagrams. |
+| [**04. Integration Guide**](./docs/topic--04-integration-guide.md) | Installation, peers, wiring with msgmesh and livestruct, Web Worker setup, batching, testing. |
+| [**05. API Reference**](./docs/topic--05-api-reference.md) | Every public export per entry point with signatures and options. |
+| [System Architecture](./docs/topic--architecture.md) | Layered architecture summary. |
+| [Domain Model](./docs/topic--domain-model.md) | Key types: CDC events, commands, targets, worker protocol. |
+| [Setup & Workflow](./docs/topic--setup-and-workflow.md) | Scripts, tests and development inside the mempart monorepo. |
+| [License](./docs/topic--license.md) | MIT license. |

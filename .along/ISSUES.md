@@ -1,7 +1,7 @@
 # Active Issues
 
 ## Active
-<!-- No active issues -->
+- [ ] `(docs)` [kb-parity-and-pages](ISSUES/docs--kb-parity-and-pages.md)
 
 ## Backlog
 <!-- No backlog issues -->

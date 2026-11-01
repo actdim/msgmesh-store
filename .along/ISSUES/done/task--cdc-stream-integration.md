@@ -10,7 +10,6 @@ created: 2026-10-30
 updated: 2026-10-30
 agent: antigravity
 tags: [cdc, sqlite, events, streams]
-milestone: v2.0.0-along-transition
 blocked_by: []
 related: []
 ---

@@ -7,7 +7,6 @@ agent: antigravity
 branch: main
 commit: d83bcc1
 summary: 'feat(msgmesh-store): implement Web Worker boundary transport for storage'
-milestone: v2.0.0-along-transition
 issues_advanced: []
 issues_completed: [task--worker-boundary-transport]
 decisions: []
