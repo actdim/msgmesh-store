@@ -3,7 +3,8 @@ protocol: along
 protocol_version: "4.5.4"
 slug: bridge-sync-correctness
 type: bug
-status: in-progress
+status: done
+completed: 2026-11-01
 priority: high
 created: 2026-10-31
 updated: 2026-11-01
