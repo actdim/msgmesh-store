@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, Subject } from 'rxjs';
 import { take, toArray } from 'rxjs/operators';
 import { createMsgBus } from '@actdim/msgmesh/core';
 import {
@@ -350,6 +350,83 @@ describe('Change Data Capture (CDC) Stream Integration', () => {
         expect(collectionEvents).toHaveLength(1);
         expect(collectionEvents[0].collection).toBe('widgets');
         expect(collectionEvents[0].id).toBe('w-100');
+
+        bridge.dispose();
+    });
+
+    it('REQ-7: malformed CDC item calls onInvalid without terminating stream; erroring source sets isConnected to false', async () => {
+        const rawSubject = new Subject<any>();
+        let invalidCount = 0;
+        let receivedError: unknown = null;
+
+        const cdc$ = toStoreCdcObservable(rawSubject.asObservable(), {
+            onInvalid: (err) => {
+                invalidCount++;
+                receivedError = err;
+            },
+        });
+
+        const bridge = createCdcBridge(cdc$, bus);
+        expect(bridge.isConnected).toBe(true);
+
+        const receivedEvents: StoreCdcEvent[] = [];
+        bridge.cdc$.subscribe({
+            next: (e) => receivedEvents.push(e),
+            error: () => {},
+        });
+
+        // 1. Emit invalid non-object item (null, string)
+        rawSubject.next(null);
+        rawSubject.next('invalid');
+
+        expect(invalidCount).toBe(2);
+        expect(receivedError).toBeDefined();
+
+        // 2. Stream is NOT terminated; valid item is delivered
+        rawSubject.next({
+            type: 'insert',
+            collection: 'test',
+            id: '1',
+            delta: { ok: true },
+        });
+
+        expect(receivedEvents).toHaveLength(1);
+        expect(receivedEvents[0].id).toBe('1');
+        expect(bridge.isConnected).toBe(true);
+
+        // 3. Erroring source marks bridge.isConnected === false
+        rawSubject.error(new Error('Fatal source error'));
+        expect(bridge.isConnected).toBe(false);
+
+        bridge.dispose();
+    });
+
+    it('REQ-8: subscriber mutating payload.delta throws because delta is frozen, engine doc unchanged', async () => {
+        const bridge = createCdcBridge(engine, bus, { freezeEvents: true });
+
+        let subscriberError: unknown = null;
+        bus.on({
+            channel: 'STORE.ENTITY_CHANGED',
+            group: 'out',
+            topic: 'users',
+            callback: (msg) => {
+                const event = msg.payload as StoreCdcEvent;
+                try {
+                    // Attempt to mutate frozen delta
+                    (event.delta as any).name = 'Malicious Hack';
+                } catch (err) {
+                    subscriberError = err;
+                }
+            },
+        });
+
+        await engine.insertDoc('users', 'u-secure', { name: 'Original Name' });
+        await new Promise((r) => setTimeout(r, 20));
+
+        expect(subscriberError).toBeInstanceOf(TypeError);
+
+        const doc = await engine.getDoc('users', 'u-secure');
+        expect(doc?.data).toEqual({ name: 'Original Name' });
 
         bridge.dispose();
     });

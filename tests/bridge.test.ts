@@ -537,4 +537,395 @@ describe('Store Bridge & Echo Suppression Integration', () => {
         controller2.dispose();
         await store2.close();
     });
+
+    it('REQ-2: two concurrent PATCH commands for a new id in one tick apply sequentially without losing writes', async () => {
+        await store.collection('items');
+        const controller = attachStoreBridge(bus, store);
+        const events: StoreCdcEvent[] = [];
+        controller.cdc$.subscribe((e) => {
+            if (e.id === 'concurrent-doc-1') {
+                events.push(e);
+            }
+        });
+
+        await Promise.all([
+            bus.send({
+                channel: 'STORE.COMMAND',
+                group: 'in',
+                topic: 'items',
+                payload: {
+                    type: 'PATCH',
+                    id: 'concurrent-doc-1',
+                    delta: { fieldA: 'alpha' },
+                },
+            }),
+            bus.send({
+                channel: 'STORE.COMMAND',
+                group: 'in',
+                topic: 'items',
+                payload: {
+                    type: 'PATCH',
+                    id: 'concurrent-doc-1',
+                    delta: { fieldB: 'beta' },
+                },
+            }),
+        ]);
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        await controller.whenIdle();
+
+        const doc = await store.engine.getDoc('items', 'concurrent-doc-1');
+        expect(doc?.data).toEqual({ fieldA: 'alpha', fieldB: 'beta' });
+        expect(events).toHaveLength(2);
+        expect(events[0].type).toBe('insert');
+        expect(events[1].type).toBe('update');
+
+        controller.dispose();
+    });
+
+    it('REQ-1: PATCH on a slowed target followed immediately by DELETE results in deleted document', async () => {
+        let storedDoc: Record<string, unknown> | null = null;
+        const slowTarget = {
+            async get() {
+                return storedDoc;
+            },
+            async insert(_col: string, _id: string, data: Record<string, unknown>) {
+                await new Promise((resolve) => setTimeout(resolve, 30));
+                storedDoc = { ...data };
+                return storedDoc;
+            },
+            async patch(_col: string, _id: string, data: Record<string, unknown>) {
+                await new Promise((resolve) => setTimeout(resolve, 30));
+                storedDoc = { ...storedDoc, ...data };
+                return storedDoc;
+            },
+            async remove() {
+                storedDoc = null;
+                return true;
+            },
+        };
+
+        const controller = attachStoreBridge(bus, slowTarget, { enableCdcStream: false });
+
+        const p1 = bus.send({
+            channel: 'STORE.COMMAND',
+            group: 'in',
+            topic: 'items',
+            payload: {
+                type: 'PATCH',
+                id: 'doc-slow-1',
+                delta: { status: 'temp' },
+            },
+        });
+        const p2 = bus.send({
+            channel: 'STORE.COMMAND',
+            group: 'in',
+            topic: 'items',
+            payload: {
+                type: 'DELETE',
+                id: 'doc-slow-1',
+            },
+        });
+
+        await Promise.all([p1, p2]);
+        await controller.whenIdle();
+
+        expect(storedDoc).toBeNull();
+        controller.dispose();
+    });
+
+    it('REQ-4: command declaring origin remote emits on cdc$ with remote origin and does NOT re-publish to bus', async () => {
+        await store.collection('items');
+        const controller = attachStoreBridge(bus, store);
+
+        let busEntityChangedCount = 0;
+        bus.on({
+            channel: 'STORE.ENTITY_CHANGED',
+            group: 'out',
+            topic: '/.*/',
+            callback: () => {
+                busEntityChangedCount++;
+            },
+        });
+
+        const cdcEventPromise = firstValueFrom(
+            controller.cdc$.pipe(filter((e) => e.id === 'remote-cmd-1'))
+        );
+
+        await bus.send({
+            channel: 'STORE.COMMAND',
+            group: 'in',
+            topic: 'items',
+            payload: {
+                type: 'CREATE',
+                id: 'remote-cmd-1',
+                delta: { val: 123 },
+                origin: 'remote',
+            },
+        });
+
+        const cdcEvent = await cdcEventPromise;
+        expect(cdcEvent.origin).toBe('remote');
+
+        await controller.whenIdle();
+        expect(busEntityChangedCount).toBe(0);
+
+        controller.dispose();
+    });
+
+    it('REQ-4: direct engine local write is published to the bus exactly once', async () => {
+        await store.collection('items');
+        const controller = attachStoreBridge(bus, store);
+
+        let receivedCount = 0;
+        const busEventPromise = new Promise<StoreCdcEvent>((resolve) => {
+            bus.on({
+                channel: 'STORE.ENTITY_CHANGED',
+                group: 'out',
+                topic: 'items',
+                callback: (msg) => {
+                    const ev = msg.payload as StoreCdcEvent;
+                    if (ev.id === 'direct-local-1') {
+                        receivedCount++;
+                        resolve(ev);
+                    }
+                },
+            });
+        });
+
+        await store.engine.insertDoc('items', 'direct-local-1', { direct: true });
+        const busEvent = await busEventPromise;
+
+        expect(busEvent.id).toBe('direct-local-1');
+        expect(busEvent.origin).toBe('local');
+        expect(receivedCount).toBe(1);
+
+        controller.dispose();
+    });
+
+    it('REQ-5: two commands sharing a correlationId but without mutationId are both applied', async () => {
+        await store.collection('items');
+        const controller = attachStoreBridge(bus, store);
+        const sharedCorrelationId = 'batch-req-xyz';
+
+        await bus.send({
+            channel: 'STORE.COMMAND',
+            group: 'in',
+            topic: 'items',
+            payload: {
+                type: 'CREATE',
+                id: 'corr-doc-1',
+                delta: { step: 1 },
+                correlationId: sharedCorrelationId,
+            },
+        });
+
+        await bus.send({
+            channel: 'STORE.COMMAND',
+            group: 'in',
+            topic: 'items',
+            payload: {
+                type: 'PATCH',
+                id: 'corr-doc-1',
+                delta: { step: 2 },
+                correlationId: sharedCorrelationId,
+            },
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        await controller.whenIdle();
+
+        const doc = await store.engine.getDoc('items', 'corr-doc-1');
+        expect(doc?.data).toEqual({ step: 2 });
+
+        controller.dispose();
+    });
+
+    it('REQ-6: duplicate command with same mutationId is dropped deterministically even after time passes', async () => {
+        await store.collection('items');
+        const controller = attachStoreBridge(bus, store);
+        let executionCount = 0;
+        controller.cdc$.subscribe((e) => {
+            if (e.id === 'dedup-doc-1') {
+                executionCount++;
+            }
+        });
+
+        const fixedMutationId = 'mut-fixed-unique-12345';
+        const firstCdcPromise = firstValueFrom(
+            controller.cdc$.pipe(filter((e) => e.id === 'dedup-doc-1'))
+        );
+
+        await bus.send({
+            channel: 'STORE.COMMAND',
+            group: 'in',
+            topic: 'items',
+            payload: {
+                type: 'CREATE',
+                id: 'dedup-doc-1',
+                delta: { counter: 1 },
+                mutationId: fixedMutationId,
+            },
+        });
+
+        await firstCdcPromise;
+        await controller.whenIdle();
+        expect(executionCount).toBe(1);
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        await bus.send({
+            channel: 'STORE.COMMAND',
+            group: 'in',
+            topic: 'items',
+            payload: {
+                type: 'PATCH',
+                id: 'dedup-doc-1',
+                delta: { counter: 2 },
+                mutationId: fixedMutationId,
+            },
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        await controller.whenIdle();
+
+        expect(executionCount).toBe(1);
+        const doc = await store.engine.getDoc('items', 'dedup-doc-1');
+        expect(doc?.data).toEqual({ counter: 1 });
+
+        controller.dispose();
+    });
+
+    it('REQ-9: rejecting bus.send routes to errors$ and causes zero unhandled rejections', async () => {
+        await store.collection('items');
+        const erroringBus = {
+            send: async () => {
+                throw new Error('Network transport failure');
+            },
+            on: () => () => {},
+        };
+
+        const controller = attachStoreBridge(erroringBus, store);
+
+        const errorPromise = firstValueFrom(
+            controller.errors$.pipe(filter((e) => e.kind === 'bus_send'))
+        );
+
+        await store.engine.insertDoc('items', 'fail-send-1', { a: 1 });
+
+        const errEvent = await errorPromise;
+        expect(errEvent.kind).toBe('bus_send');
+        expect((errEvent.error as Error).message).toBe('Network transport failure');
+
+        controller.dispose();
+    });
+
+    it('REQ-10: bridge on users collection rejects commands for orders topic via errors$ and leaves collection untouched', async () => {
+        const usersCol = await store.collection('users');
+        const controller = attachStoreBridge(bus, usersCol, {
+            collection: 'users',
+        });
+
+        const errorPromise = firstValueFrom(
+            controller.errors$.pipe(filter((e) => e.kind === 'command'))
+        );
+
+        await bus.send({
+            channel: 'STORE.COMMAND',
+            group: 'in',
+            topic: 'orders',
+            payload: {
+                type: 'CREATE',
+                id: 'order-99',
+                delta: { total: 100 },
+            },
+        });
+
+        const errEvent = await errorPromise;
+        expect(errEvent.kind).toBe('command');
+        expect(errEvent.collection).toBe('orders');
+        expect(errEvent.id).toBe('order-99');
+        expect((errEvent.error as Error).message).toContain("does not match bound collection 'users'");
+
+        await controller.whenIdle();
+
+        const orderDoc = await store.engine.getDoc('orders', 'order-99');
+        expect(orderDoc).toBeNull();
+
+        controller.dispose();
+    });
+
+    it('REQ-4: two-bridge cross-tab sync asserts exact ENTITY_CHANGED sends (one per original local write)', async () => {
+        const storeA = store;
+        const storeB = await createLiveStruct({
+            name: `test-store-b-${Date.now()}`,
+            forceMemory: true,
+        });
+
+        const bridgeA = attachStoreBridge(bus, storeA, { channelPrefix: 'SYNC_TWO' });
+        const bridgeB = attachStoreBridge(bus, storeB, { channelPrefix: 'SYNC_TWO' });
+
+        let entityChangedCount = 0;
+        bus.on({
+            channel: 'SYNC_TWO.ENTITY_CHANGED',
+            group: 'out',
+            topic: '/.*/',
+            callback: () => {
+                entityChangedCount++;
+            },
+        });
+
+        // Wire up cross-tab synchronization: when bus receives ENTITY_CHANGED, send COMMAND to peers
+        const subSync = bus.on({
+            channel: 'SYNC_TWO.ENTITY_CHANGED',
+            group: 'out',
+            topic: '/.*/',
+            callback: (msg) => {
+                const event = msg.payload as StoreCdcEvent;
+                void bus.send({
+                    channel: 'SYNC_TWO.COMMAND',
+                    group: 'in',
+                    topic: event.collection,
+                    payload: {
+                        type: event.type === 'delete' ? 'DELETE' : 'PATCH',
+                        collection: event.collection,
+                        id: event.id,
+                        delta: event.delta,
+                        mutationId: event.mutationId,
+                        sourceId: event.sourceId,
+                        origin: 'bus',
+                    },
+                });
+            },
+        });
+
+        // Perform 3 distinct local writes on Store A
+        await storeA.engine.insertDoc('docs', 'doc-1', { v: 1 });
+        await storeA.engine.insertDoc('docs', 'doc-2', { v: 2 });
+        await storeA.engine.patchDoc('docs', 'doc-1', { v: 10 });
+
+        await bridgeA.whenIdle();
+        await bridgeB.whenIdle();
+
+        // Wait for the relay microtasks to settle
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await bridgeA.whenIdle();
+        await bridgeB.whenIdle();
+
+        // Store B has received all writes
+        const docB1 = await storeB.engine.getDoc('docs', 'doc-1');
+        const docB2 = await storeB.engine.getDoc('docs', 'doc-2');
+        expect(docB1?.data).toEqual({ v: 10 });
+        expect(docB2?.data).toEqual({ v: 2 });
+
+        // EXACT number of ENTITY_CHANGED sends must be 3 (one per original local write, 0 echoes from bridgeB)
+        expect(entityChangedCount).toBe(3);
+
+        if (typeof subSync === 'function') {
+            (subSync as () => void)();
+        }
+        bridgeA.dispose();
+        bridgeB.dispose();
+        await storeB.close();
+    });
 });

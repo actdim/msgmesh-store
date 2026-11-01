@@ -4,8 +4,10 @@ import {
     Subscription,
     type MonoTypeOperatorFunction,
     isObservable,
+    of,
+    EMPTY,
 } from 'rxjs';
-import { filter, map } from 'rxjs/operators';
+import { filter, mergeMap } from 'rxjs/operators';
 import type {
     StoreCdcEvent,
     StoreCdcOrigin,
@@ -17,14 +19,82 @@ import type {
 } from './types';
 
 /**
+ * Deep freezes an object and all nested properties in place.
+ */
+export function deepFreeze<T>(obj: T, visited = new Set<unknown>()): T {
+    if (obj === null || typeof obj !== 'object' || Object.isFrozen(obj)) {
+        return obj;
+    }
+    if (visited.has(obj)) {
+        return obj;
+    }
+    visited.add(obj);
+    Object.freeze(obj);
+    for (const key of Object.getOwnPropertyNames(obj)) {
+        const val = (obj as Record<string, unknown>)[key];
+        if (val !== null && typeof val === 'object') {
+            deepFreeze(val, visited);
+        }
+    }
+    return obj;
+}
+
+/**
+ * Safely clones an object with structuredClone or JSON fallback.
+ */
+export function safeClone<T>(val: T): T {
+    if (val === null || typeof val !== 'object') {
+        return val;
+    }
+    try {
+        return structuredClone(val);
+    } catch {
+        try {
+            return JSON.parse(JSON.stringify(val));
+        } catch {
+            return { ...(val as Record<string, unknown>) } as T;
+        }
+    }
+}
+
+/**
+ * Wraps a bus.send call to guarantee no unhandled promise rejections.
+ */
+export function safeSend(
+    bus: MsgMeshBusLike,
+    params: {
+        channel: string | any;
+        group?: string | any;
+        topic?: string;
+        payload?: unknown;
+        [key: string]: unknown;
+    },
+    onError?: (err: unknown) => void
+): Promise<unknown> {
+    return Promise.resolve()
+        .then(() => bus.send(params))
+        .catch((err) => {
+            onError?.(err);
+        });
+}
+
+/**
+ * Options for toStoreCdcObservable.
+ */
+export interface ToStoreCdcObservableOptions {
+    readonly defaultCollection?: string;
+    readonly defaultOrigin?: StoreCdcOrigin;
+    readonly onInvalid?: (error: unknown, rawItem: unknown) => void;
+    readonly freezeEvents?: boolean;
+}
+
+/**
  * Normalizes any storage engine, collection, or reactive stream into an Observable of StoreCdcEvent.
+ * Drops malformed items without terminating the stream, deep-clones and freezes delta.
  */
 export function toStoreCdcObservable(
     source: unknown,
-    options: {
-        defaultCollection?: string;
-        defaultOrigin?: StoreCdcOrigin;
-    } = {}
+    options: ToStoreCdcObservableOptions = {}
 ): Observable<StoreCdcEvent> {
     if (!source) {
         throw new Error('CDC source must not be null or undefined.');
@@ -52,7 +122,7 @@ export function toStoreCdcObservable(
         inferredCollection = (source as { tableName: string }).tableName;
         rawStream$ = (source as { cdc$: Observable<unknown> }).cdc$;
     }
-    // Case 4: Source is a LiveCollection (has .name and (.cdc$ or .engineAccess or .rawEngine))
+    // Case 4: Source is a LiveCollection (has .name and (.cdc$ or .engineAccess))
     else if (typeof source === 'object' && 'name' in (source as Record<string, unknown>)) {
         inferredCollection = (source as { name: string }).name;
         const col = source as Record<string, unknown>;
@@ -64,11 +134,12 @@ export function toStoreCdcObservable(
             'cdc$' in (col.engineAccess as Record<string, unknown>)
         ) {
             rawStream$ = (col.engineAccess as { cdc$: Observable<unknown> }).cdc$;
-        } else if (col.rawEngine && typeof col.rawEngine === 'object') {
-            return toStoreCdcObservable(col.rawEngine, {
-                defaultCollection: inferredCollection,
-                defaultOrigin,
-            });
+        } else if (
+            col.engine &&
+            typeof col.engine === 'object' &&
+            'cdc$' in (col.engine as Record<string, unknown>)
+        ) {
+            rawStream$ = (col.engine as { cdc$: Observable<unknown> }).cdc$;
         }
     }
     // Case 5: Source has .cdc$ Observable
@@ -98,34 +169,49 @@ export function toStoreCdcObservable(
     }
 
     return rawStream$.pipe(
-        map((rawItem: unknown): StoreCdcEvent => {
-            if (!rawItem || typeof rawItem !== 'object') {
-                throw new Error('Received invalid non-object item from CDC source.');
+        mergeMap((rawItem: unknown): Observable<StoreCdcEvent> => {
+            try {
+                if (!rawItem || typeof rawItem !== 'object') {
+                    throw new Error('Received invalid non-object item from CDC source.');
+                }
+
+                const item = rawItem as Record<string, unknown>;
+                const rawType = String(item.type || 'update').toLowerCase();
+                const type: StoreCdcType =
+                    rawType === 'insert' ? 'insert' : rawType === 'delete' ? 'delete' : 'update';
+
+                const collection = String(
+                    item.collection || inferredCollection || options.defaultCollection || 'default'
+                );
+                const id = String(item.id ?? '');
+                const rawDelta = (item.delta ?? item.data ?? {}) as Record<string, unknown>;
+                const delta =
+                    options.freezeEvents !== false
+                        ? deepFreeze(safeClone(rawDelta))
+                        : rawDelta;
+                const origin: StoreCdcOrigin = (item.origin as StoreCdcOrigin) || defaultOrigin;
+                const timestamp = typeof item.timestamp === 'number' ? item.timestamp : Date.now();
+                const mutationId =
+                    item.mutationId !== undefined ? String(item.mutationId) : undefined;
+                const sourceId =
+                    item.sourceId !== undefined ? String(item.sourceId) : undefined;
+
+                const event: StoreCdcEvent = {
+                    type,
+                    collection,
+                    id,
+                    delta,
+                    origin,
+                    timestamp,
+                    mutationId,
+                    ...(sourceId ? { sourceId } : {}),
+                };
+
+                return of(options.freezeEvents !== false ? deepFreeze(event) : event);
+            } catch (e) {
+                options.onInvalid?.(e, rawItem);
+                return EMPTY;
             }
-
-            const item = rawItem as Record<string, unknown>;
-            const rawType = String(item.type || 'update').toLowerCase();
-            const type: StoreCdcType =
-                rawType === 'insert' ? 'insert' : rawType === 'delete' ? 'delete' : 'update';
-
-            const collection = String(
-                item.collection || inferredCollection || options.defaultCollection || 'default'
-            );
-            const id = String(item.id ?? '');
-            const delta = (item.delta ?? item.data ?? {}) as Record<string, unknown>;
-            const origin: StoreCdcOrigin = (item.origin as StoreCdcOrigin) || defaultOrigin;
-            const timestamp = typeof item.timestamp === 'number' ? item.timestamp : Date.now();
-            const mutationId = item.mutationId !== undefined ? String(item.mutationId) : undefined;
-
-            return {
-                type,
-                collection,
-                id,
-                delta,
-                origin,
-                timestamp,
-                mutationId,
-            };
         })
     );
 }
@@ -191,21 +277,32 @@ export function publishCdcToBus(
 
     return cdc$.subscribe({
         next: (event) => {
-            void bus.send({
-                channel: primaryChannel,
-                group: 'out',
-                topic: event.collection,
-                payload: event,
-            });
+            safeSend(
+                bus,
+                {
+                    channel: primaryChannel,
+                    group: 'out',
+                    topic: event.collection,
+                    payload: event,
+                },
+                options.onError
+            );
 
             if (options.secondaryChannelPerCollection) {
-                void bus.send({
-                    channel: `${channelPrefix}.${event.collection}.CHANGED`,
-                    group: 'out',
-                    topic: event.id,
-                    payload: event,
-                });
+                safeSend(
+                    bus,
+                    {
+                        channel: `${channelPrefix}.${event.collection}.CHANGED`,
+                        group: 'out',
+                        topic: event.id,
+                        payload: event,
+                    },
+                    options.onError
+                );
             }
+        },
+        error: (err) => {
+            options.onError?.(err);
         },
     });
 }
@@ -280,11 +377,14 @@ export function createCdcBridge(
     options: CdcBridgeOptions = {}
 ): CdcBridge {
     let disposed = false;
+    let sourceAlive = true;
     const cdcSubject = new Subject<StoreCdcEvent>();
 
     const source$ = toStoreCdcObservable(source, {
         defaultCollection: options.collection,
         defaultOrigin: options.defaultOrigin,
+        onInvalid: options.onInvalid,
+        freezeEvents: options.freezeEvents,
     });
 
     const filteredSource$ = options.collection
@@ -298,11 +398,13 @@ export function createCdcBridge(
             }
         },
         error: (err) => {
+            sourceAlive = false;
             if (!disposed) {
                 cdcSubject.error(err);
             }
         },
         complete: () => {
+            sourceAlive = false;
             if (!disposed) {
                 cdcSubject.complete();
             }
@@ -319,7 +421,7 @@ export function createCdcBridge(
             return disposed;
         },
         get isConnected(): boolean {
-            return !disposed;
+            return !disposed && sourceAlive;
         },
         get cdc$(): Observable<StoreCdcEvent> {
             return cdcSubject.asObservable();
@@ -329,6 +431,7 @@ export function createCdcBridge(
                 return;
             }
             disposed = true;
+            sourceAlive = false;
             if (busSub) {
                 busSub.unsubscribe();
                 busSub = null;

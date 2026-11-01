@@ -42,11 +42,9 @@ async function executeWorkerMutation(
     }
 
     const rec = target as Record<string, any>;
-    const rawEngine =
+    const storageEngine =
         rec.engine && typeof rec.engine.patchDoc === 'function'
             ? rec.engine
-            : rec.rawEngine && typeof rec.rawEngine.patchDoc === 'function'
-            ? rec.rawEngine
             : typeof rec.patchDoc === 'function' && typeof rec.insertDoc === 'function'
             ? rec
             : null;
@@ -54,39 +52,39 @@ async function executeWorkerMutation(
     const payloadData = data ?? {};
 
     // 1. Direct low-level SQLite / storage engine execution
-    if (rawEngine) {
+    if (storageEngine) {
         if (action === 'CREATE') {
-            const existing = await rawEngine.getDoc(collection, docId);
+            const existing = await storageEngine.getDoc(collection, docId);
             if (existing) {
-                await rawEngine.patchDoc(collection, docId, payloadData, undefined, mutationId);
+                await storageEngine.patchDoc(collection, docId, payloadData, undefined, mutationId);
             } else {
-                await rawEngine.insertDoc(collection, docId, payloadData, undefined, mutationId);
+                await storageEngine.insertDoc(collection, docId, payloadData, undefined, mutationId);
             }
             return;
         }
 
         if (action === 'DELETE') {
-            await rawEngine.deleteDoc(collection, docId, mutationId);
+            await storageEngine.deleteDoc(collection, docId, mutationId);
             return;
         }
 
         if (action === 'PATCH_PATH' && path) {
             const patchObj = buildNestedPathPatch(path, value);
-            const existing = await rawEngine.getDoc(collection, docId);
+            const existing = await storageEngine.getDoc(collection, docId);
             if (existing) {
-                await rawEngine.patchDoc(collection, docId, patchObj, undefined, mutationId);
+                await storageEngine.patchDoc(collection, docId, patchObj, undefined, mutationId);
             } else {
-                await rawEngine.insertDoc(collection, docId, patchObj, undefined, mutationId);
+                await storageEngine.insertDoc(collection, docId, patchObj, undefined, mutationId);
             }
             return;
         }
 
         // Default: PATCH
-        const existing = await rawEngine.getDoc(collection, docId);
+        const existing = await storageEngine.getDoc(collection, docId);
         if (existing) {
-            await rawEngine.patchDoc(collection, docId, payloadData, undefined, mutationId);
+            await storageEngine.patchDoc(collection, docId, payloadData, undefined, mutationId);
         } else {
-            await rawEngine.insertDoc(collection, docId, payloadData, undefined, mutationId);
+            await storageEngine.insertDoc(collection, docId, payloadData, undefined, mutationId);
         }
         return;
     }
@@ -330,8 +328,6 @@ export function attachWorkerStoreHost(
                 const engine =
                     rec?.engine && typeof rec.engine.queryRaw === 'function'
                         ? rec.engine
-                        : rec?.rawEngine && typeof rec.rawEngine.queryRaw === 'function'
-                        ? rec.rawEngine
                         : typeof rec?.queryRaw === 'function'
                         ? rec
                         : null;

@@ -1,10 +1,11 @@
 # Active Issues
 
 ## Active
-<!-- No active issues -->
+- [ ] `(bug)` [bridge-sync-correctness](ISSUES/bug--bridge-sync-correctness.md)
 
 ## Backlog
-<!-- No backlog issues -->
+- [ ] `(bug)` [worker-transport-lifecycle](ISSUES/bug--worker-transport-lifecycle.md)
+- [ ] `(debt)` [perf-tests-and-types](ISSUES/debt--perf-tests-and-types.md)
 
 ## Done (recent)
 - [x] `(task)` [worker-boundary-transport](ISSUES/done/task--worker-boundary-transport.md)

@@ -24,6 +24,7 @@ export interface StoreCdcEvent<T = Record<string, unknown>> {
     readonly origin: StoreCdcOrigin;
     readonly timestamp: number;
     readonly mutationId?: string;
+    readonly sourceId?: string;
 }
 
 /**
@@ -45,6 +46,9 @@ export interface CdcBridgeOptions {
     readonly defaultOrigin?: StoreCdcOrigin;
     readonly collection?: string;
     readonly secondaryChannelPerCollection?: boolean;
+    readonly onError?: (err: unknown) => void;
+    readonly onInvalid?: (err: unknown, rawItem: unknown) => void;
+    readonly freezeEvents?: boolean;
 }
 
 /**
