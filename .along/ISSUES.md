@@ -4,7 +4,11 @@
 <!-- No active issues -->
 
 ## Backlog
-<!-- No backlog issues -->
+- [ ] `(bug)` [collection-target-drops-origin](ISSUES/bug--collection-target-drops-origin.md)
+- [ ] `(bug)` [custom-collection-target-unresolved](ISSUES/bug--custom-collection-target-unresolved.md)
+- [ ] `(bug)` [worker-host-ignores-close](ISSUES/bug--worker-host-ignores-close.md)
+- [ ] `(debt)` [store-bridge-dead-options](ISSUES/debt--store-bridge-dead-options.md)
+- [ ] `(feat)` [worker-command-origin](ISSUES/feat--worker-command-origin.md)
 
 ## Done (recent)
 - [x] `(docs)` [kb-parity-and-pages](ISSUES/done/docs--kb-parity-and-pages.md)
