@@ -19,7 +19,7 @@ If LiveStore already synchronizes state across browser tabs via SQLite and `Broa
 **LiveStore solves storage, not communication.** A message bus is required whenever interactions cross execution boundaries or involve non-persistent orchestration:
 
 1. **Web Worker Boundary Crossing:**
-   Running SQLite WASM and heavy computational solvers in a Web Worker means the main UI thread cannot hold direct MobX proxies. `@actdim/msgmesh-store` bridges commands and change deltas across the `postMessage` boundary with zero proxy serialization overhead.
+   Running SQLite WASM and heavy computational solvers in a Web Worker means the main UI thread cannot hold direct in-memory reactive object proxies. `@actdim/msgmesh-store` bridges commands and change deltas across the `postMessage` boundary with zero proxy serialization overhead.
 2. **Change Data Capture (CDC) for Decoupled Services:**
    Decoupled modules (audit logs, analytics, minimaps, cloud sync watermarks) need to react when database records change, without holding direct class instances or query subscriptions to the underlying documents.
 3. **Command Bus (CQRS Pipeline):**
@@ -33,7 +33,7 @@ If LiveStore already synchronizes state across browser tabs via SQLite and `Broa
 
 | Scenario | Recommended Approach | Reason |
 |---|---|---|
-| Local UI Form in the same thread | **Direct MobX / LiveDocument** | Direct property access (`m.color = 'red'`) is 1000x faster, fully type-safe, and avoids magic string paths. |
+| Local UI Form in the same thread | **Direct In-Memory Mutation (LiveDocument / Model)** | Direct property access is faster, fully type-safe, and avoids serialized bus hops. |
 | UI thread to Web Worker storage | **@actdim/msgmesh-store Bridge** | Serialized delta packets carry data across threads cleanly. |
 | Decoupled services (audit, sync) | **Store CDC Events via Bus** | Modules listen to `STORE.ENTITY_CHANGED` without tight coupling to models. |
 | High-frequency interactions (60fps drag) | **Pure In-Memory MsgMesh** | Transient events bypass the disk log entirely. |
@@ -46,33 +46,40 @@ If LiveStore already synchronizes state across browser tabs via SQLite and `Broa
 import { createMsgBus } from '@actdim/msgmesh/core';
 import { attachStoreBridge } from '@actdim/msgmesh-store';
 import { createLiveStruct } from '@actdim/livestruct';
+import type { StoreCdcEvent } from '@actdim/msgmesh-store/cdc';
 
 // 1. Instantiate bus and store
 const bus = createMsgBus();
 const store = await createLiveStruct({ name: 'workspace_db' });
 const parts = await store.collection('parts');
 
-// 2. Attach store bridge to bus
+// 2. Attach store bridge to bus (defaults to channelPrefix: 'STORE')
 const bridge = attachStoreBridge(bus, parts, {
-    channelPrefix: 'PARTS',
     enableCdcStream: true,
     enableCommandHandling: true,
 });
 
-// 3. Decoupled services listen to CDC stream
-bridge.cdc$.subscribe((event) => {
-    console.log('CDC event:', event.type, event.id, event.delta);
+// 3. Decoupled services listen to change events via the message bus
+bus.on({
+    channel: 'STORE.ENTITY_CHANGED',
+    group: 'out',
+    topic: 'parts',
+    callback: (msg) => {
+        const event = msg.payload as StoreCdcEvent;
+        console.log('Entity changed:', event.type, event.id, event.delta);
+    },
 });
 
-// 4. Remote or worker dispatches command over bus
-//    (the bridge listens on PARTS.COMMAND and PARTS.parts.COMMAND)
+// 4. Remote module or worker dispatches command over the bus
 await bus.send({
-    channel: 'PARTS.COMMAND',
+    channel: 'STORE.COMMAND',
     group: 'in',
     topic: 'parts',
     payload: { type: 'PATCH', id: 'part-101', delta: { color: 'green' } },
 });
 ```
+
+> **Note on Local In-Process Streams**: Local code in the same process can also subscribe directly to `bridge.cdc$` (or use the `subscribeCdc(bus)` helper) to receive an RxJS `Observable<StoreCdcEvent>` without manual message bus unpacking.
 
 ---
 
@@ -81,7 +88,7 @@ await bus.send({
 ```text
   [ Local Forms / Dynstruct UI ]         [ Decoupled Services / Minimap / Cloud ]
                 |                                          |
-        Direct MobX Access                         Listen to Bus Channels
+       Direct Model Mutation                       Listen to Bus Channels
                 v                                          v
    +-------------------------+                     +---------------+
    |       LiveStruct        |                     |    MsgMesh    |

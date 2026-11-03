@@ -6,3 +6,7 @@ dist
 
 # VitePress output
 .dist-docs/
+
+# Along session state
+.along/.session/
+
