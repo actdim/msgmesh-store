@@ -78,6 +78,7 @@
         "access": "public"
     },
     "sideEffects": false,
+    "packageManager": "pnpm@10.21.0",
     "scripts": {
         "test": "npx vitest --config=vitest.node.config.ts --no-cache",
         "test:w": "npx vitest --config=vitest.node.config.ts --watch",
@@ -101,9 +102,6 @@
         }
     },
     "devDependencies": {
-        "@actdim/livestruct": ">=1.12.2",
-        "@actdim/msgmesh": ">=1.12.2",
-        "@actdim/utico": ">=1.12.2",
         "@types/node": "^24.10.0",
         "prettier": "^3.5.3",
         "rxjs": "^7.8.2",

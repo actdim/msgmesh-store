@@ -5,9 +5,12 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
       - 'README.md'
       - 'llms.txt'
       - 'llms-full.txt'
+      - 'src/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -28,20 +31,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
+          cache: pnpm
 
-      # The package devDependencies use pnpm catalogs and unpublished @actdim siblings,
-      # so a standalone install fails outside the monorepo. The docs only need VitePress.
-      - name: Install docs toolchain
-        run: |
-          TOOLS="$RUNNER_TEMP/docs-tools"
-          mkdir -p "$TOOLS"
-          cd "$TOOLS"
-          npm init -y > /dev/null
-          npm install --no-audit --no-fund vitepress@^1.6.4 vitepress-plugin-mermaid@^2.0.17 mermaid@^11.4.1
-          ln -s "$TOOLS/node_modules" "$GITHUB_WORKSPACE/node_modules"
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile --config.auto-install-peers=false
 
       - name: Copy root files to public
         run: |
@@ -50,7 +51,7 @@ jobs:
           cp -f llms-full.txt docs/public/llms-full.txt 2>/dev/null || true
 
       - name: Build documentation
-        run: node_modules/.bin/vitepress build docs
+        run: pnpm run docs:build
 
       - uses: actions/upload-pages-artifact@v3
         with:

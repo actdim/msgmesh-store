@@ -23,6 +23,17 @@ export default withMermaid(
 
     markdown: {
       config: (md) => {
+        const defaultCodeInline =
+          md.renderer.rules.code_inline ||
+          function (tokens, idx, options, env, self) {
+            return self.renderToken(tokens, idx, options);
+          };
+
+        md.renderer.rules.code_inline = function (tokens, idx, options, env, self) {
+          tokens[idx].attrSet('v-pre', '');
+          return defaultCodeInline(tokens, idx, options, env, self);
+        };
+
         const defaultRender =
           md.renderer.rules.link_open ||
           function (tokens, idx, options, env, self) {
