@@ -29,7 +29,7 @@ Runtime hooks enforce these where installed; elsewhere (`along doctor` shows the
 - [gate: untracked-exports] - dashboards and `.along/diagnostics/` stay out of Git.
 - [gate: cli_safety] - file content via file tools, never heredocs or `python -c`; no global installs.
 - [gate: team-step-active] [gate: team-reviews-before-stop] - an `along-team` blackboard holds you to its step loop.
-- [gate: test_before_stop] [gate: wrap_before_stop] [gate: projection_sync_before_stop] - before stopping: tests green, session wrapped, projections synced.
+- [gate: test_before_stop] [gate: wrap_before_stop] [gate: projection_sync_before_stop] - before stopping: tests run after your last edit, session wrapped, projections synced.
 - [gate: unresolved_gate_denial] - a denied tool call is redone within the gate's rules or told to the user (`along gates ack`), never dropped silently; closing waits for their reply.
 - Commit-time (`along lint`, pre-commit + CI): ASCII typography, fence languages, relative links, no `docs/` -> `.along/` links, Windows-safe names, no secrets, no stubs.
 - Bypass is the user's call: `-n`, `--force-reason`, `scratch fallback` need `--reason` after their reply; recorded in `along gates stats`.
@@ -38,6 +38,7 @@ Runtime hooks enforce these where installed; elsewhere (`along doctor` shows the
 - Ground facts in code, `README.md` and `docs/`; no generic placeholders. Query `/along-kb-search` before reading whole docs; update affected `docs/topic--*.md` after non-trivial changes.
 - Use `/along-test`, `/along-build`, `/along-dev` before raw commands, with quiet flags. Review your diff and blast radius (`along graph-impact`).
 - Never delete or truncate docs, comments or code unless told; no stubs; check `git diff --stat` after batch edits. Verify written files parse. Tests stay hermetic.
+- Stay in scope: failures your issue did not cause (red at HEAD, untouched code) are reported and filed as an issue, never fixed under this one; never edit tests or fixtures to make them pass unless the issue is about them; bypass (`-n --reason`) only after the user's reply.
 - Scope > 3 files, crossing subsystems or refactoring core engines: route to `along-team`; plans MUST declare `Execution Mode: Direct` or `Role-Based`.
 - Treat the `along` CLI as a black box (`along <cmd> --help`, no engine source outside the Along repo); report its errors verbatim.
 <!-- END ALONG-PROTOCOL -->
