@@ -1,6 +1,6 @@
 {
     "name": "@actdim/msgmesh-store",
-    "version": "1.12.2",
+    "version": "1.14.0",
     "description": "Decoupled message bus bridge and Change Data Capture (CDC) engine connecting @actdim/msgmesh with persistent stores (LiveStruct & LiveStore).",
     "author": "Pavel Borodaev",
     "license": "MIT",
@@ -91,9 +91,9 @@
         "docs:preview": "vitepress preview docs"
     },
     "peerDependencies": {
-        "@actdim/livestruct": ">=1.12.2",
-        "@actdim/msgmesh": ">=1.12.2",
-        "@actdim/utico": ">=1.12.2",
+        "@actdim/livestruct": ">=1.14.0",
+        "@actdim/msgmesh": ">=1.14.0",
+        "@actdim/utico": ">=1.14.0",
         "rxjs": ">=7.8.0"
     },
     "peerDependenciesMeta": {
@@ -102,7 +102,7 @@
         }
     },
     "devDependencies": {
-        "@actdim/dev-config": ">=1.12.2",
+        "@actdim/dev-config": ">=1.14.0",
         "@types/node": "^24.10.0",
         "prettier": "^3.9.6",
         "rxjs": "^7.8.2",

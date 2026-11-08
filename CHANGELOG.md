@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.14.0] - 2026-11-08
+
+### Changed
+- Adopted `@actdim/dev-config` 1.12.2 presets for ESLint, Prettier, and tsconfig (`#adopt-dev-config`).
+- Standardized GitHub Pages CI workflow, lockfile, and VitePress documentation matching dynstruct parity (`#docs-ci-pages-parity`).
+- Synchronized workspace dependencies to `>=1.14.0`.
+
 ## [1.11.1] - 2026-11-01
 
 ### Changed
