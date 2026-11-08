@@ -3,14 +3,14 @@ protocol: along
 protocol_version: "4.6.1"
 slug: adopt-dev-config
 type: task
-status: open
+status: in-progress
 priority: medium
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-08
 agent: antigravity
 parent: task--shared-lint-tsconfig
 tags: [tooling, lint, typescript, dev-config]
-blocked_by: ["publish of @actdim/dev-config 1.12.2"]
+blocked_by: []
 related: []
 plan_status: proposed
 ---
