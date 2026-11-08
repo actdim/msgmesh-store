@@ -4,7 +4,7 @@ slug: INDEX
 title: '@actdim/msgmesh-store - Knowledge Base Topic Index'
 type: index
 created: 2026-10-30
-updated: 2026-11-05
+updated: 2026-11-08
 tags: [index, kb, topics, map]
 ---
 
@@ -27,10 +27,10 @@ flowchart TD
     INDEX --> T_04_INTEGRATION_GUIDE
     T_05_API_REFERENCE["API Reference"]
     INDEX --> T_05_API_REFERENCE
-    T_ALONG_PROTOCOL["Along Protocol Reference"]
-    INDEX --> T_ALONG_PROTOCOL
     T_ARCHITECTURE["System Architecture & Flow"]
     INDEX --> T_ARCHITECTURE
+    T_DEPENDENCIES["Dependencies & AI Documentation for @actdim/msgmesh-store"]
+    INDEX --> T_DEPENDENCIES
     T_DOMAIN_MODEL["Domain Model & Type Contracts"]
     INDEX --> T_DOMAIN_MODEL
     T_LICENSE["License"]
@@ -73,8 +73,8 @@ flowchart TD
 - **[Architecture & Wiring](./topic--03-architecture-and-wiring.md)** (topic) `03-architecture-and-wiring`, `data-flow`, `echo-suppression`, `worker`, `mermaid`
 - **[Integration Guide](./topic--04-integration-guide.md)** (topic) `04-integration-guide`, `install`, `livestruct`, `msgmesh`, `worker`, `batching`
 - **[API Reference](./topic--05-api-reference.md)** (topic) `05-api-reference`, `api`, `contracts`, `exports`
-- **[Along Protocol Reference](./topic--along-protocol.md)** (reference) `protocol`, `agents-md`, `checklist`, `routing`, `concurrency`, `along-team`, `conventions`
 - **[System Architecture & Flow](./topic--architecture.md)** (architecture) `architecture`, `bridge`, `cdc`, `worker`, `echo-suppression`
+- **[Dependencies & AI Documentation for @actdim/msgmesh-store](./topic--dependencies.md)** (topic) `dependencies`, `subproject`, `ai-context`, `rules`
 - **[Domain Model & Type Contracts](./topic--domain-model.md)** (domain-model) `domain-model`, `types`, `cdc`, `commands`, `worker-protocol`
 - **[License](./topic--license.md)** (license) `license`, `mit`
 - **[Setup, Build & Workflow](./topic--setup-and-workflow.md)** (setup-workflow) `setup`, `workflow`, `build`, `tests`, `monorepo`

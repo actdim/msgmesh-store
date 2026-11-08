@@ -11,8 +11,8 @@
 - [docs/topic--03-architecture-and-wiring.md](docs/topic--03-architecture-and-wiring.md): Architecture & Wiring.
 - [docs/topic--04-integration-guide.md](docs/topic--04-integration-guide.md): Integration Guide.
 - [docs/topic--05-api-reference.md](docs/topic--05-api-reference.md): API Reference.
-- [docs/topic--along-protocol.md](docs/topic--along-protocol.md): Along Protocol Reference.
 - [docs/topic--architecture.md](docs/topic--architecture.md): System Architecture & Flow.
+- [docs/topic--dependencies.md](docs/topic--dependencies.md): Dependencies & AI Documentation for @actdim/msgmesh-store.
 - [docs/topic--domain-model.md](docs/topic--domain-model.md): Domain Model & Type Contracts.
 - [docs/topic--license.md](docs/topic--license.md): License.
 - [docs/topic--setup-and-workflow.md](docs/topic--setup-and-workflow.md): Setup, Build & Workflow.
