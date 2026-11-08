@@ -10,6 +10,7 @@
 - [ ] `(bug)` [worker-host-ignores-close](ISSUES/bug--worker-host-ignores-close.md)
 - [ ] `(debt)` [add-eslint](ISSUES/debt--add-eslint.md)
 - [ ] `(debt)` [store-bridge-dead-options](ISSUES/debt--store-bridge-dead-options.md)
+- [ ] `(feat)` [message-storage-provider](ISSUES/feat--message-storage-provider.md)
 - [ ] `(feat)` [worker-command-origin](ISSUES/feat--worker-command-origin.md)
 - [ ] `(task)` [docs-ci-pages-parity](ISSUES/task--docs-ci-pages-parity.md)
 
