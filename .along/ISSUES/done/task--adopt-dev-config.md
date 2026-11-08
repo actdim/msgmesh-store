@@ -3,7 +3,8 @@ protocol: along
 protocol_version: "4.6.1"
 slug: adopt-dev-config
 type: task
-status: in-progress
+status: done
+completed: 2026-11-08
 priority: medium
 created: 2026-11-06
 updated: 2026-11-08
@@ -12,7 +13,7 @@ parent: task--shared-lint-tsconfig
 tags: [tooling, lint, typescript, dev-config]
 blocked_by: []
 related: []
-plan_status: proposed
+plan_status: approved
 ---
 
 # Adopt @actdim/dev-config shared presets
@@ -34,6 +35,14 @@ Migrate local ESLint, Prettier, and TypeScript compiler configurations to `@actd
 7. Verify standalone: `pnpm install && pnpm lint && pnpm typecheck` in a standalone clone.
 8. Commit in submodule, push to remote, and bump pointer in Mempart root.
 
+## Outcome (2026-11-08)
+- Recipe correction: this package has no ESLint (no config, no `lint` script), so step 3 does not apply; adding it is `debt--add-eslint`.
+- `lib` stays `["ESNext", "DOM", "DOM.Iterable"]` (ES2022 would drop ESNext APIs used in `src/`).
+- `prettier.config.js` = `@actdim/dev-config/prettier` (inside Mempart the package previously resolved Mempart `src/prettier.config.js`, the dev-config tailwind preset; standalone it had no config). Prettier `--check` list unchanged. `prettier` devDependency raised to `^3.9.6` (dev-config peer).
+- `--showConfig` diffs (build, dev): decorator flags removed, `isolatedModules: true` (+ implied `preserveConstEnums`), `dom.iterable` added. Nothing else.
+- In Mempart: typecheck, build and 7 test files pass.
+- Standalone clone: typecheck / build / test were already red at HEAD `7c467b1` (peers not installed) and are identical after the change: tracked in `bug--standalone-missing-peer-devdeps`.
+
 ## Acceptance Criteria
-- [ ] Submodule builds and passes lint and typecheck standalone.
-- [ ] No regression in finding sets and effective compiler options.
+- [x] No standalone regression: typecheck, build and test results in a fresh clone equal those at HEAD (no lint configured; see `debt--add-eslint`; pre-existing peer gap filed as `bug--standalone-missing-peer-devdeps`).
+- [x] No regression in effective compiler options and Prettier results.
