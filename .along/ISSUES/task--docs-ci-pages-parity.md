@@ -4,7 +4,6 @@ protocol_version: "4.6.0"
 slug: docs-ci-pages-parity
 type: task
 status: done
-completed: 2026-11-05
 priority: high
 created: 2026-11-05
 updated: 2026-11-05
