@@ -1,7 +1,7 @@
 ---
 protocol: along
 protocol_version: "4.8.1"
-slug: topic--dependencies
+slug: dependencies
 title: Dependencies & AI Documentation for @actdim/msgmesh-store
 type: topic
 created: 2026-11-11
