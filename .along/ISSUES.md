@@ -13,6 +13,7 @@
 - [ ] `(feat)` [message-storage-provider](ISSUES/feat--message-storage-provider.md)
 - [ ] `(feat)` [worker-command-origin](ISSUES/feat--worker-command-origin.md)
 - [ ] `(task)` [docs-ci-pages-parity](ISSUES/task--docs-ci-pages-parity.md)
+- [ ] `(task)` [docs-static-publish](ISSUES/task--docs-static-publish.md)
 
 ## Done (recent)
 - [x] `(task)` [adopt-dev-config](ISSUES/done/task--adopt-dev-config.md)
