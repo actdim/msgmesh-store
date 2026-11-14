@@ -1,17 +1,18 @@
 <!-- BEGIN ALONG-PROTOCOL root (managed by along-init - do not edit by hand) -->
-# ALONG-PROTOCOL v4.8.0
+# ALONG-PROTOCOL v4.9.0
 
 This repo carries its own agent context, provider-agnostically. Follow it every session, whatever tool you are. This is the core; procedures (completion checklist, doc routing, merges, along-team, tool-use rules) live in `.along/PROTOCOL.md` - pull the section you need via `/along-kb-search`. A gate's error message carries its detail.
 
 ## Where state lives
-- **Nearest wins**: any folder may carry its own `AGENTS.md` + `.along/`; use the NEAREST for the area you work in. Nearest `.along/` > higher-level `.along/` > global config. Only a nested `.git` or a user-run `along init` makes a subproject.
+- **Nearest wins**: any folder may carry `AGENTS.md` + `.along/`; use NEAREST for your working area: nearest `.along/` > parent `.along/` > global config. A nested `.git` or `along init` makes a subproject.
 - **Read at session start** (not auto-loaded): `.along/ISSUES.md`, `.along/CONSTRAINTS.md`, your issue `.along/ISSUES/<type>--<slug>.md`; when relevant `.along/VISION.md`, `.along/GLOSSARY.md`. They reflect the state WHEN WRITTEN - verify named files/APIs/flags against the code.
 - **Entities**: issues (`feat|bug|debt|task|docs|spike`), ADRs (`.along/DECISIONS/`, never edited - superseded), milestones, sessions. Keys `<type>--<slug>`, referenced by key, never by path; schemas in `docs/topic--domain-model.md`. Create them from intent unprompted (build/fix -> issue, blocked -> issue tagged `risk`, compare -> `spike` issue, release -> milestone).
 - **Projections** (`ISSUES.md`, `DECISIONS.md`, `CONSTRAINTS.md`, `docs/INDEX.md`) are compiled: on conflict take either side and re-run the sync.
+- **Authority & Discovery**: Entity location and plan approval come from the CLI (`along issue find <slug>`, `along plan status`) or issue front matter (`plan_status`). Projections are compiled overviews and may lag or omit subproject details. Before reporting an entity as missing, search all nested contexts with `along issue find <slug>`.
 
 ## Anchor work to an issue
 1. Find or create the issue with `status: in-progress`; `along start <slug>` binds this session.
-2. Source edits unlock after the user approves the plan (`EnterPlanMode` -> `ExitPlanMode`, or `along plan approve --plan-file <path>` after their explicit yes). Questions get read-only answers; 1-line typo/comment edits are exempt.
+2. Source edits unlock after the user approves the plan (`EnterPlanMode` -> `ExitPlanMode`, or `along plan approve --plan-file <path>` after their explicit yes). Questions get read-only answers.
 3. Commit via `/along-commit`: bound to the slug, no AI `Co-Authored-By:` trailers.
 4. Finish with the completion checklist, ending in `along wrap <slug> --summary "..." (--decisions <ADR...> | --no-decisions)`.
 
@@ -29,7 +30,7 @@ Runtime hooks enforce these where installed; elsewhere (`along doctor` shows the
 - [gate: untracked-exports] - dashboards and `.along/diagnostics/` stay out of Git.
 - [gate: cli_safety] - file content via file tools, never heredocs or `python -c`; no global installs.
 - [gate: team-step-active] [gate: team-reviews-before-stop] - an `along-team` blackboard holds you to its step loop.
-- [gate: test_before_stop] [gate: wrap_before_stop] [gate: projection_sync_before_stop] - before stopping: tests run after your last edit, session wrapped, projections synced.
+- [gate: test_before_stop] [gate: wrap_before_stop] [gate: projection_sync_before_stop] - before stopping: tests (per the approved verify policy) run after your last edit, session wrapped, projections synced.
 - [gate: unresolved_gate_denial] - a denied tool call is redone within the gate's rules or told to the user (`along gates ack`), never dropped silently; closing waits for their reply.
 - Commit-time (`along lint`, pre-commit + CI): ASCII typography, fence languages, relative links, no `docs/` -> `.along/` links, Windows-safe names, no secrets, no stubs.
 - Bypass is the user's call: `-n`, `--force-reason`, `scratch fallback` need `--reason` after their reply; recorded in `along gates stats`.

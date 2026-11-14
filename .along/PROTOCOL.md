@@ -17,7 +17,7 @@ The managed block in `AGENTS.md` is the always-loaded core of the ALONG-PROTOCOL
 
 - **Nearest Context Boundary**: Any folder may carry its own `AGENTS.md` + `.along/`; use the NEAREST ones for the area you're working in. On conflict, the more specific wins.
 - **Subproject Localization** [gate: subproject-boundary]: In submodules, nested repos or symlinked folders: all entities (issues, sessions, ADRs, history) MUST be created in the NEAREST `.along/`. Agents are STRICTLY FORBIDDEN from dumping subproject changes into the workspace root `.along/`.
-- **Multi-Subproject Work** [gate: subproject-boundary]: A change spanning subprojects needs an issue in each touched `.along/`, or a root umbrella issue whose child issues there carry `parent: <umbrella key>`. Edits under a subproject `.along/` are checked by path.
+- **Multi-Subproject Work** [gate: subproject-boundary]: A change spanning subprojects needs an issue in each touched `.along/`, or a root umbrella issue whose child issues there carry `parent: <umbrella key>` or that the umbrella issue lists under `children: [<sub>:<child key>]`. Edits under a subproject `.along/` are checked by path.
 - **Subproject Boundary**: only a nested `.git` or a user-run `along init` makes a subproject; never init a manifest folder.
 - **Precedence**: Nearest `.along/` > higher-level `.along/` > global config (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/config/GEMINI.md`).
 
@@ -44,7 +44,7 @@ Also, when relevant: `.along/VISION.md`, `.along/GLOSSARY.md`. These reflect the
 
 - **No Code Without Issue** [gate: require-active-issue]: Before modifying source code, agents MUST identify or create an issue in `.along/ISSUES/<type>--<slug>.md` and set `status: in-progress`.
 - **Session Binding & Plan Approval** [gate: require-plan-approval]: `along start <slug>` binds THIS agent session to the issue; parallel sessions keep their own bindings. Source edits unlock after the user approves the plan (`EnterPlanMode` -> `ExitPlanMode`; outside plan mode, write the plan to a file and run `along plan approve --plan-file <path>` after the user's explicit yes). `along plan status` shows the binding.
-- **Exemptions**: Read-only Q&A and 1-line micro-edits (typo fixes, comments) do not require issues.
+- **Exemptions**: Read-only Q&A does not require an issue. Every repository edit, including a 1-line typo or comment fix, needs an in-progress issue and an approved plan.
 - **Inquiry Read-Only Invariance (Zero-Mutation Rule on Questions)** [gate: require-plan-approval]: On interrogative prompts ("is X done?", "why did Y fail?"), write/modify tools are STRICTLY PROHIBITED. Return a read-only audit report and ask for confirmation before modifying anything.
 - **Commit Binding** [gate: commit-issue-binding]: Every commit via `/along-commit` MUST bind to the active issue slug.
 - **No AI Co-Authors**: Commit messages MUST NOT carry `Co-Authored-By:` trailers naming an AI agent (GitHub lists the vendor as a contributor). `along hook install` turns runtime attribution off; opt out via `.along/config.json` `commits.allow_ai_coauthor: true`.
@@ -101,7 +101,7 @@ Also, when relevant: `.along/VISION.md`, `.along/GLOSSARY.md`. These reflect the
 ## Stage & Session Completion Checklist
 
 When a stage or session completes, agents MUST execute in this order:
-1. [ ] **Tests** [gate: test_before_stop]: Run via `/along-test` with quiet flags. Zero failures caused by this issue. On a failure the test gate prints a `[Baseline]` line. Pre-existing failures (red at HEAD, code the issue did not touch): halt, report the exact failures to the user, file an issue, and only with their agreement bypass: `along commit -n --reason "pre-existing failure in <suite>, tracked in <key>"`, `along wrap <slug> -n --reason "..."`. Never edit tests or fixtures to make them pass unless the issue is about them.
+1. [ ] **Tests** [gate: test_before_stop]: Run via `/along-test` with quiet flags. Zero failures caused by this issue. Tests follow the effective verify policy (issue-level approved snapshot > repo config); `none` is a recorded, legitimate skip, not a bypass. On a failure the test gate prints a `[Baseline]` line. Pre-existing failures (red at HEAD, code the issue did not touch): halt, report the exact failures to the user, file an issue, and only with their agreement bypass: `along commit -n --reason "pre-existing failure in <suite>, tracked in <key>"`, `along wrap <slug> -n --reason "..."`. Never edit tests or fixtures to make them pass unless the issue is about them.
 2. [ ] **File Integrity**: `git status -u` - all new/modified files non-zero size, no empty placeholders.
 3. [ ] **Code Review**: Inspect diff for side effects, verify REQ-N coverage, evaluate blast radius via `along graph-impact` (or static search), verify architectural decision compliance.
 4. [ ] **Entity Reconciliation**: Close issues (`done` + move to `done/`), update milestones, record the `## Outcome` of a spike. [gate: unresolved_gate_denial]: every tool call a gate denied is redone within the gate's rules or disclosed (`along gates denials`, `along gates ack <id> --note "..."`); `along wrap` / `along issue done` refuse until the user has replied to a disclosure (`--force-reason` after their reply).
@@ -124,7 +124,8 @@ When a stage or session completes, agents MUST execute in this order:
 - **Environment Isolation**:
   - Agents MUST NOT install system-wide or global packages when a script fails. Fix the architecture (missing `bootstrap.ensure_deps()`, incorrect `uv` wrapper), not the environment.
 - **Workspace Containment** [gate: workspace-containment]: Read and write only inside the workspace. Writes elsewhere are limited to the temp dir and runtime artifact dirs. Other repos need `allowed_roots` (`.along/rules/gates.yaml`, issue frontmatter, `along start --allow-root`). Never touch credential stores (`~/.ssh`, `~/.aws`).
-- **Runtimes Without Along Hooks** (Claude Cowork, Cursor, OpenCode, plain shells): gates are advisory there. Agents MUST self-apply every gate-tagged rule and use the `along` CLI for tests, commits, entity changes, and wrap instead of raw tools. `along doctor` reports the enforcement level.
+- **Runtimes Without Along Hooks**: In uninstrumented runtimes (Claude Cowork, Cursor, plain shells), gates are advisory: agents MUST self-apply every gate-tagged rule and use the `along` CLI for tests, commits, entity changes, and wrap. Mechanical gates run where Along lifecycle hooks or plugins are active (Claude Code, Antigravity, Codex, OpenCode with along-gates plugin). `along doctor` reports the active enforcement level.
+- **Sub-Agents & Session Binding Across Runtimes**: Sub-agents spawned by a parent agent share the parent session's issue binding and workspace containment unless explicitly delegated an independent issue. In hook-enforced runtimes, sub-agents inherit environment variables (such as `ALONG_SESSION_KEY`) or bind to their conversation ID. In hookless or advisory runtimes, Along does not block sub-agents; agents must maintain the active issue in commits and wrap. Routing to `along-team` is governed strictly by complexity (scope > 3 files, cross-subsystem impact), not by whether sub-agents are supported.
 - **File Modification & Anti-Deletion**:
   - Never delete, truncate, or overwrite existing documentation, comments, or code unless explicitly instructed.
   - After batch edits or migrations, agents MUST run `git diff --stat` and inspect unexpected size reductions.
@@ -142,3 +143,13 @@ When a stage or session completes, agents MUST execute in this order:
 - Windows-safe filenames: dates `YYYY-MM-DD`, date first.
 - Keep `ISSUES.md` compact: `along context-budget --check` enforces the limit.
 - Never write secrets into tracked files.
+
+## Testing Invariants
+
+- **Levels and Precedence**: Verify policy is declared at repository level (`.along/config.json`: `tests: required | none`) and optionally overridden at issue level (`tests: required | affected | scoped | none`). Effective policy precedence: approved issue plan snapshot > repository config > default (`required`).
+- **Plan Approval Snapshot & Drift**: The issue-level verify block takes effect ONLY through the plan-approval snapshot stored in `.along/.session/plan-approvals.jsonl`. Raw edits to issue front matter after approval are ignored with a drift warning; re-approve the plan to update the policy.
+- **Environment Variables**: The test runner contract injects `ALONG_TEST_MODE` (`full | affected | scoped`), `ALONG_TEST_SCOPE` (name from `verify.scopes`), and `ALONG_ATTRIBUTED_FILES` (path to newline-delimited attributed files list).
+- **Run Coverage & Reuse**: A green `full` run satisfies any subsequent test request on the same tree. An `affected` or `scoped` run satisfies only requests matching the exact mode and scope. Partial runs never satisfy a `full` request.
+- **Manual CLI Flags**: `along test` runs under the effective policy by default. Agents can explicitly pass `--full`, `--affected`, or `--scope <name>` to override mode for a run.
+- **Hermeticity & Dirty Tree Warning**: Test suites must not mutate the tracked repository tree. If a test run dirties the tree, the Wrap Quality Gate prints a hermeticity warning naming dirty paths. Add generated artifacts to `.gitignore` or `ignore_paths` under `test_before_stop` in `.along/rules/gates.yaml`.
+- **Local Experiments**: Use `along wrap <slug> --no-commit` when keeping local experiment files without auto-committing them.
