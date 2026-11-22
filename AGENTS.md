@@ -1,5 +1,5 @@
 <!-- BEGIN ALONG-PROTOCOL root (managed by along-init - do not edit by hand) -->
-# ALONG-PROTOCOL v4.9.0
+# ALONG-PROTOCOL v4.9.1
 
 This repo carries its own agent context, provider-agnostically. Follow it every session, whatever tool you are. This is the core; procedures (completion checklist, doc routing, merges, along-team, tool-use rules) live in `.along/PROTOCOL.md` - pull the section you need via `/along-kb-search`. A gate's error message carries its detail.
 
